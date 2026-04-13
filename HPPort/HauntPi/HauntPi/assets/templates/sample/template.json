@@ -1,0 +1,38 @@
+{
+  "name": "sample",
+  "background_video": "assets/MicrosoftTeams-video.mp4",
+  "fps": 0,
+  "resolution": [
+    1280,
+    720
+  ],
+  "duration_sec": 5,
+  "slots": [
+    {
+      "name": "slot0",
+      "anchor": "mouth_center",
+      "size": [
+        220,
+        260
+      ],
+      "offset": [
+        -120,
+        -20
+      ],
+      "rotation_from": "eyes"
+    },
+    {
+      "name": "slot1",
+      "anchor": "mouth_center",
+      "size": [
+        220,
+        260
+      ],
+      "offset": [
+        120,
+        -20
+      ],
+      "rotation_from": "eyes"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "witches",
+  "background_video": "assets/MicrosoftTeams-video.mp4",
+  "fps": 0,
+  "marker_tracking": {
+    "enabled": true,
+    "expected": 4,
+    "smooth_alpha": 0.85,
+    "dropout_max": 10,
+    "max_match_dist_ratio": 0.18
+  },
+  "slots": [
+    {"name":"witch0","anchor":"center","size":[220,260],"position":[260,300],"rotation_from":"eyes"},
+    {"name":"witch1","anchor":"center","size":[220,260],"position":[520,300],"rotation_from":"eyes"},
+    {"name":"witch2","anchor":"center","size":[220,260],"position":[800,300],"rotation_from":"eyes"},
+    {"name":"witch3","anchor":"center","size":[220,260],"position":[1060,300],"rotation_from":"eyes"}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "export": {
+    "fps": 30,
+    "duration_sec": 3,
+    "jaw_open_pct": 0.18,
+    "shake_px": 6,
+    "flicker": true
+  }
+}

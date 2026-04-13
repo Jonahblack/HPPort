@@ -1,0 +1,39 @@
+{
+  "demo_mode": {
+    "enabled": false,
+    "auto_wake_on_start": true,
+    "auto_wake_interval_seconds": 0,
+    "scripted_user_input": "Tell me a short spooky greeting."
+  },
+  "renderer": {
+    "width": 800,
+    "height": 480,
+    "fps": 30,
+    "window_title": "Talking Portrait",
+    "headless": false
+  },
+  "camera": {
+    "enabled": true,
+    "backend": "picam2",
+    "index": 0,
+    "width": 1280,
+    "height": 720,
+    "fps": 20,
+    "hef_path": "models/yolov5m.hef",
+    "hailo_threshold": 0.55,
+    "poll_interval_seconds": 0.12,
+    "cooldown_seconds": 15.0,
+    "motion_fallback_enabled": true,
+    "voice_only_fallback": true
+  },
+  "conversation": {
+    "wake_word": "portrait",
+    "stop_phrase": "goodbye portrait",
+    "gemini_model": "gemini-2.0-flash",
+    "greeting_on_camera": "Hello there. I saw you walk up. What would you like to talk about?",
+    "greeting_on_voice": "Yes? I am listening."
+  },
+  "cooldown": {
+    "seconds": 10.0
+  }
+}
