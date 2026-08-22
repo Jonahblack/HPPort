@@ -1,0 +1,11 @@
+{
+  "name": "Talking Portrait",
+  "description": "Interactive Harry Potter-style talking portrait powered by Gemma 4 on Raspberry Pi 5 with Hailo AI person detection, Piper TTS, and modular architecture.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,8 +1,0 @@
-{
-  "export": {
-    "burst_frames": 8,
-    "max_faces": 4,
-    "template": "assets/templates/witches/template.json",
-    "fps": 30
-  }
-}

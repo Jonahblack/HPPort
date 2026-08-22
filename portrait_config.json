@@ -1,0 +1,73 @@
+{
+  "hardware": {
+    "target": "raspberry_pi_5",
+    "storage_mount_path": "/mnt/portrait",
+    "models_dir": "/mnt/portrait/models",
+    "cache_dir": "/mnt/portrait/cache",
+    "audio_dir": "/mnt/portrait/audio",
+    "logs_dir": "/mnt/portrait/logs"
+  },
+  "state_machine": {
+    "wake_confirm_frames": 3,
+    "wake_confirm_timeout_seconds": 1.5,
+    "silence_timeout_seconds": 2.0,
+    "max_listen_duration_seconds": 10.0,
+    "max_consecutive_silence": 2,
+    "cooldown_duration_seconds": 8.0
+  },
+  "vision": {
+    "driver": "hailo",
+    "confidence_threshold": 0.55,
+    "poll_interval_seconds": 0.1,
+    "camera_width": 640,
+    "camera_height": 480,
+    "camera_fps": 30
+  },
+  "llm": {
+    "driver": "llama_client",
+    "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
+    "model_name": "gemma-4-e2b-instruct",
+    "temperature": 0.7,
+    "max_tokens": 150,
+    "system_prompt": "You are Lord Cadogan, an eccentric, chivalrous, and proud knight trapped inside an enchanted Harry Potter-style painted portrait. Keep your answers brief, lively, and in-character (1 to 3 short sentences suitable for spoken speech). Never use emoji or bullet points. Greet visitors with flair and ask engaging questions.",
+    "greeting_prompt": "Ah, a visitor arrives before my frame! State your business, noble wanderer!"
+  },
+  "stt": {
+    "driver": "local_stt",
+    "engine": "faster_whisper",
+    "model_size": "tiny.en",
+    "language": "en",
+    "device": "cpu",
+    "compute_type": "int8",
+    "vad_filter": true,
+    "energy_threshold": 300
+  },
+  "tts": {
+    "driver": "piper",
+    "piper_binary_path": "/mnt/portrait/models/piper/piper",
+    "model_path": "/mnt/portrait/models/piper/en_US-ryan-high.onnx",
+    "model_config_path": "/mnt/portrait/models/piper/en_US-ryan-high.onnx.json",
+    "speaker_id": 0,
+    "length_scale": 1.0,
+    "noise_scale": 0.667,
+    "noise_w": 0.8
+  },
+  "renderer": {
+    "window_title": "Harry Potter Talking Portrait (Gemma 4)",
+    "width": 1024,
+    "height": 768,
+    "fullscreen": false,
+    "fps": 60,
+    "assets_dir": "assets",
+    "blink_min_seconds": 2.0,
+    "blink_max_seconds": 5.0,
+    "blink_duration_ms": 150,
+    "amplitude_threshold_mouth_2": 0.15,
+    "amplitude_threshold_mouth_3": 0.45
+  },
+  "logging": {
+    "log_level": "INFO",
+    "latency_profiling": true,
+    "log_to_file": true
+  }
+}
