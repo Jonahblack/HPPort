@@ -8,6 +8,7 @@ import {
   PersonaType,
   AssetLayerSet,
 } from "./types";
+import { useCameraStream } from "./hooks/useCameraStream";
 import { PortraitCanvas } from "./components/PortraitCanvas";
 import { CameraTrigger } from "./components/CameraTrigger";
 import { VoiceController } from "./components/VoiceController";
@@ -27,7 +28,9 @@ import {
   Cpu,
   Terminal,
   Zap,
+  Camera,
 } from "lucide-react";
+
 
 const INITIAL_CONFIG: AppConfig = {
   demo_mode: {
@@ -112,14 +115,6 @@ export const App: React.FC = () => {
     totalTurnLatency: 1.45,
   });
 
-  const [cameraStatus, setCameraStatus] = useState<CameraTriggerStatus>({
-    active: true,
-    mode: "hailo_ai",
-    personDetected: false,
-    motionScore: 0,
-    lastTriggerAt: null,
-  });
-
   const stateRef = useRef(state);
   stateRef.current = state;
   const configRef = useRef(config);
@@ -169,6 +164,30 @@ export const App: React.FC = () => {
     }, 450);
   }, [triggerSpeech]);
 
+  // Camera & Vision Subsystem with Pi 5 debug stream and console logging
+  const {
+    stream: cameraStream,
+    status: cameraStatus,
+    motionLevel,
+    cameraError,
+    deviceInfo: cameraDeviceInfo,
+    logs: visionLogs,
+    isMirrored: isCameraMirrored,
+    setIsMirrored: setIsCameraMirrored,
+    showCornerFeed,
+    setShowCornerFeed,
+    cornerFeedSize,
+    setCornerFeedSize,
+    initCamera: reconnectCamera,
+    clearLogs: clearVisionLogs,
+    manualTrigger: manualCameraTrigger,
+  } = useCameraStream({
+    config: config.camera,
+    onTrigger: () => handleTrigger("camera"),
+    currentState: state,
+  });
+
+
   // Handle User Utterance / Input -> THINKING -> Gemma 4 -> Piper TTS
   const handleUserInput = useCallback(async (userText: string) => {
     const sttStartTime = performance.now();
@@ -200,7 +219,7 @@ export const App: React.FC = () => {
       }
 
       const data = await response.json();
-      const reply = data.text || "By my troth, a mysterious force blocks my thoughts!";
+      const reply = data.reply || data.text || "By my troth, a mysterious force blocks my thoughts!";
 
       // Update telemetry latency stats
       setLatencyMetrics({
@@ -368,6 +387,21 @@ export const App: React.FC = () => {
 
         {/* Header Action Controls */}
         <div className="flex items-center gap-2">
+          {/* Pi 5 Camera Feed in Corner Toggle */}
+          <button
+            onClick={() => setShowCornerFeed(!showCornerFeed)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border transition-all cursor-pointer ${
+              showCornerFeed
+                ? "bg-amber-950/80 text-amber-200 border-amber-600/70 shadow-sm"
+                : "bg-stone-900 text-stone-400 border-stone-800 hover:text-stone-200"
+            }`}
+            title="Toggle Live Camera Feed Corner Visual"
+          >
+            <Camera className={`w-3.5 h-3.5 ${cameraStatus.personDetected ? "text-emerald-400" : "text-amber-400"}`} />
+            <span className="hidden sm:inline">Camera Corner HUD</span>
+            <span className="sm:hidden">Cam</span>
+          </button>
+
           {state === PortraitState.IDLE ? (
             <button
               onClick={() => handleTrigger("demo")}
@@ -447,6 +481,27 @@ export const App: React.FC = () => {
                 handleTrigger("demo");
               }
             }}
+            cameraStream={cameraStream}
+            cameraStatus={cameraStatus}
+            motionLevel={motionLevel}
+            cameraThreshold={config.camera.hailo_threshold}
+            cameraError={cameraError}
+            cameraDeviceInfo={cameraDeviceInfo}
+            visionLogs={visionLogs}
+            isCameraMirrored={isCameraMirrored}
+            onToggleCameraMirror={() => setIsCameraMirrored(!isCameraMirrored)}
+            showCornerCamera={showCornerFeed}
+            cornerCameraSize={cornerFeedSize}
+            onChangeCornerCameraSize={setCornerFeedSize}
+            onManualCameraTrigger={manualCameraTrigger}
+            onReconnectCamera={reconnectCamera}
+            onClearVisionLogs={clearVisionLogs}
+            onChangeThreshold={(thresh) =>
+              setConfig((prev) => ({
+                ...prev,
+                camera: { ...prev.camera, hailo_threshold: thresh },
+              }))
+            }
           />
 
           {/* Quick Architecture Bar */}
@@ -493,11 +548,23 @@ export const App: React.FC = () => {
           {/* 1. Optical Camera Sensor */}
           <CameraTrigger
             config={config.camera}
-            onTrigger={() => handleTrigger("camera")}
             status={cameraStatus}
-            setStatus={setCameraStatus}
+            motionLevel={motionLevel}
+            stream={cameraStream}
+            cameraError={cameraError}
+            deviceInfo={cameraDeviceInfo}
+            logs={visionLogs}
             canTrigger={state === PortraitState.IDLE}
+            onManualTrigger={manualCameraTrigger}
+            onReconnect={reconnectCamera}
+            onChangeThreshold={(thresh) =>
+              setConfig((prev) => ({
+                ...prev,
+                camera: { ...prev.camera, hailo_threshold: thresh },
+              }))
+            }
           />
+
 
           {/* 2. Voice & Dialogue Controller */}
           <VoiceController

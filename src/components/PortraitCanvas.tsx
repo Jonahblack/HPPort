@@ -1,5 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
-import { PortraitState, RenderConfig, PersonaType, AssetLayerSet } from "../types";
+import {
+  PortraitState,
+  RenderConfig,
+  PersonaType,
+  AssetLayerSet,
+  CameraTriggerStatus,
+  VisionLogEntry,
+  CameraDeviceInfo,
+} from "../types";
+import { CameraCornerFeed } from "./CameraCornerFeed";
 
 interface PortraitCanvasProps {
   state: PortraitState;
@@ -13,6 +22,23 @@ interface PortraitCanvasProps {
   isForceBlinking?: boolean;
   showGuides?: boolean;
   onCanvasClick?: () => void;
+  // Corner Live Camera Debug Visual Props
+  cameraStream?: MediaStream | null;
+  cameraStatus?: CameraTriggerStatus;
+  motionLevel?: number;
+  cameraThreshold?: number;
+  cameraError?: string | null;
+  cameraDeviceInfo?: CameraDeviceInfo | null;
+  visionLogs?: VisionLogEntry[];
+  isCameraMirrored?: boolean;
+  onToggleCameraMirror?: () => void;
+  showCornerCamera?: boolean;
+  cornerCameraSize?: "compact" | "normal" | "minimized";
+  onChangeCornerCameraSize?: (size: "compact" | "normal" | "minimized") => void;
+  onManualCameraTrigger?: () => void;
+  onReconnectCamera?: () => void;
+  onClearVisionLogs?: () => void;
+  onChangeThreshold?: (thresh: number) => void;
 }
 
 export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
@@ -27,6 +53,22 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
   isForceBlinking = false,
   showGuides = false,
   onCanvasClick,
+  cameraStream,
+  cameraStatus,
+  motionLevel = 0,
+  cameraThreshold = 0.45,
+  cameraError = null,
+  cameraDeviceInfo = null,
+  visionLogs = [],
+  isCameraMirrored = true,
+  onToggleCameraMirror = () => {},
+  showCornerCamera = true,
+  cornerCameraSize = "normal",
+  onChangeCornerCameraSize = () => {},
+  onManualCameraTrigger = () => {},
+  onReconnectCamera = () => {},
+  onClearVisionLogs = () => {},
+  onChangeThreshold,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -764,6 +806,29 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
         <span className="hidden sm:inline">Press <kbd className="px-1.5 py-0.5 bg-stone-800 rounded border border-stone-600 text-stone-200">Space</kbd> or click to wake</span>
         <span className="sm:hidden">Tap to wake</span>
       </div>
+
+      {/* Live Pi 5 Camera Feed in Corner */}
+      {showCornerCamera && cameraStatus && (
+        <CameraCornerFeed
+          stream={cameraStream || null}
+          status={cameraStatus}
+          motionLevel={motionLevel}
+          threshold={cameraThreshold}
+          cameraError={cameraError}
+          deviceInfo={cameraDeviceInfo}
+          logs={visionLogs}
+          currentState={state}
+          isMirrored={isCameraMirrored}
+          onToggleMirror={onToggleCameraMirror}
+          size={cornerCameraSize}
+          onChangeSize={onChangeCornerCameraSize}
+          onManualTrigger={onManualCameraTrigger}
+          onReconnect={onReconnectCamera}
+          onClearLogs={onClearVisionLogs}
+          onChangeThreshold={onChangeThreshold}
+        />
+      )}
     </div>
   );
 };
+

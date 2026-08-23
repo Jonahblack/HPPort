@@ -14,82 +14,96 @@ This guide details setting up the **Harry Potter Talking Portrait** on a Raspber
 
 ---
 
-## 1. External SSD Directory Structure
+## 1. External SSD Directory Structure & Permissions
 
-Set up the directory hierarchy on the external 500GB SSD:
+Set up the directory hierarchy on the external SSD mounted at `/mnt/portrait`:
 
 ```bash
-sudo mkdir -p /mnt/portrait/models/gemma
-sudo mkdir -p /mnt/portrait/models/stt
-sudo mkdir -p /mnt/portrait/models/piper
-sudo mkdir -p /mnt/portrait/models/hailo
-sudo mkdir -p /mnt/portrait/cache
-sudo mkdir -p /mnt/portrait/audio
-sudo mkdir -p /mnt/portrait/logs
+# 1. Mount the external SSD
+sudo mkdir -p /mnt/portrait
+sudo mount /dev/sda1 /mnt/portrait
 
+# 2. Fix ownership permissions immediately for regular user operations
 sudo chown -R $USER:$USER /mnt/portrait
+
+# 3. Create model, cache, audio, and log directories on the SSD
+mkdir -p /mnt/portrait/models/gemma
+mkdir -p /mnt/portrait/models/stt
+mkdir -p /mnt/portrait/models/piper
+mkdir -p /mnt/portrait/models/hailo
+mkdir -p /mnt/portrait/cache
+mkdir -p /mnt/portrait/audio
+mkdir -p /mnt/portrait/logs
 ```
 
 ---
 
 ## 2. Setting Up Gemma 4 with llama.cpp on Pi 5
 
+> **Note on Build Location**: Build `llama.cpp` in the user's home directory (`~/llama.cpp`) to avoid symlink and shared library permissions errors on non-ext4 filesystems. Model weights reside on the SSD.
+
 Compile and install `llama.cpp` for ARM64 with NEON acceleration:
 
 ```bash
-cd /mnt/portrait
+cd ~
 git clone https://github.com/ggerganov/llama.cpp
 cd llama.cpp
 cmake -B build -DGGML_NATIVE=ON
 cmake --build build --config Release -j4
 ```
 
-Download the quantized Gemma 4 E2B Instruct GGUF model:
+Download the quantized Gemma 4 E2B Instruct GGUF model directly via Unsloth (no HF authentication required):
 ```bash
-wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf <MODEL_DOWNLOAD_URL>
+wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf \
+  https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
 ```
 
 Start the persistent `llama-server` background service:
 ```bash
-/mnt/portrait/llama.cpp/build/bin/llama-server \
+~/llama.cpp/build/bin/llama-server \
   -m /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf \
   --port 8080 \
-  -c 2048 \
-  --threads 4 \
-  --host 127.0.0.1
+  --host 127.0.0.1 \
+  -t 4 \
+  -c 2048
 ```
 
 ---
 
-## 3. Setting Up Hailo AI HAT
+## 3. Setting Up Hailo AI HAT+ (13 TOPS / Hailo-8L)
 
-1. Ensure Raspberry Pi OS has the Hailo kernel drivers enabled in `/boot/firmware/config.txt`:
+1. Enable PCIe in `/boot/firmware/config.txt`:
    ```ini
    dtparam=pciex1
    ```
-2. Install Hailo runtime packages:
+   Save and reboot the Pi:
    ```bash
-   sudo apt install hailo-all python3-hailort
+   sudo reboot
+   ```
+2. Install Hailo runtime packages and Python bindings:
+   ```bash
+   sudo apt update && sudo apt install -y hailo-all python3-hailort
    ```
 3. Verify device detection:
    ```bash
    hailortcli scan
    ```
-4. Place the YOLOv8 person detection HEF model at:
-   `/mnt/portrait/models/hailo/yolov8s_person.hef`
+4. Download the Hailo-8L compatible YOLOv8 Person Detection model:
+   ```bash
+   wget -O /mnt/portrait/models/hailo/yolov8s_person.hef \
+     https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.13.0/hailo8l/yolov8s.hef
+   ```
 
 ---
 
 ## 4. Setting Up Piper TTS
 
-1. Download the Piper arm64 binary:
+1. Download the Piper arm64 binary and voice models:
    ```bash
+   sudo chown -R $USER:$USER /mnt/portrait
    cd /mnt/portrait/models/piper
    wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz
    tar -xzf piper_arm64.tar.gz
-   ```
-2. Download the `en_US-ryan-high` voice model & config:
-   ```bash
    wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx
    wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx.json
    ```

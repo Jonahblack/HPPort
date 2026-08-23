@@ -154,73 +154,93 @@ Raspberry Pi 5 (8GB)
 └── HDMI Display (1080p / 720p Frame) -> Pygame KMS/DRM Fullscreen
 ```
 
-### Step 1: External SSD Directory Setup
+### Step 1: External SSD Directory Setup & Permissions
 
-Format an external SSD (ext4) and mount it to `/mnt/portrait`:
+Format or connect your external SSD and mount it to `/mnt/portrait`. Clarify mounting with forward slashes and ensure permissions are assigned to the current user immediately:
 
 ```bash
-sudo mkdir -p /mnt/portrait/models/gemma
-sudo mkdir -p /mnt/portrait/models/stt
-sudo mkdir -p /mnt/portrait/models/piper
-sudo mkdir -p /mnt/portrait/models/hailo
-sudo mkdir -p /mnt/portrait/cache
-sudo mkdir -p /mnt/portrait/audio
-sudo mkdir -p /mnt/portrait/logs
+# 1. Mount the external SSD
+sudo mkdir -p /mnt/portrait
+sudo mount /dev/sda1 /mnt/portrait
 
+# 2. Fix ownership permissions immediately for regular user operations
 sudo chown -R $USER:$USER /mnt/portrait
+
+# 3. Create model, cache, audio, and log directories on the SSD
+mkdir -p /mnt/portrait/models/gemma
+mkdir -p /mnt/portrait/models/stt
+mkdir -p /mnt/portrait/models/piper
+mkdir -p /mnt/portrait/models/hailo
+mkdir -p /mnt/portrait/cache
+mkdir -p /mnt/portrait/audio
+mkdir -p /mnt/portrait/logs
 ```
 
 ### Step 2: Gemma 4 with `llama.cpp` (ARM64 NEON)
 
-1. **Build `llama.cpp` on Pi 5:**
+> **Note on Build Location**: To avoid symlink and shared library errors (`Operation not permitted`) caused by FAT32/exFAT or non-ext4 external SSDs, build `llama.cpp` directly in the user's home directory (`~/llama.cpp`). The compiled binary lives in `~/llama.cpp/build/bin/llama-server`, while model weights reside on the SSD.
+
+1. **Build `llama.cpp` in the Home Directory (`~`):**
    ```bash
-   cd /mnt/portrait
+   cd ~
    git clone https://github.com/ggerganov/llama.cpp
    cd llama.cpp
    cmake -B build -DGGML_NATIVE=ON
    cmake --build build --config Release -j4
    ```
 
-2. **Download Gemma 4 E2B Instruct GGUF:**
+2. **Download Gemma 4 E2B Instruct GGUF to SSD (Direct Unsloth GGUF, No HF token needed):**
    ```bash
    wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf \
-     https://huggingface.co/google/gemma-4-e2b-it-GGUF/resolve/main/gemma-4-e2b-it.Q4_K_M.gguf
+     https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
    ```
 
-3. **Start background `llama-server`:**
+3. **Start `llama-server` (loading model from SSD):**
    ```bash
-   /mnt/portrait/llama.cpp/build/bin/llama-server \
+   ~/llama.cpp/build/bin/llama-server \
      -m /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf \
      --port 8080 \
-     -c 2048 \
-     --threads 4 \
-     --host 127.0.0.1
+     --host 127.0.0.1 \
+     -t 4 \
+     -c 2048
    ```
 
-### Step 3: Hailo AI HAT (Vision Acceleration)
+### Step 3: Hailo AI HAT+ (13 TOPS / Hailo-8L) Vision Setup
 
-1. Enable PCIe Gen 2/3 in `/boot/firmware/config.txt`:
+1. **Enable PCIe in `/boot/firmware/config.txt`:**
+   Add the following line to `/boot/firmware/config.txt`:
    ```ini
    dtparam=pciex1
    ```
-2. Install Hailo runtime and Python bindings:
+   Save the file and reboot the Raspberry Pi:
+   ```bash
+   sudo reboot
+   ```
+
+2. **Install Hailo runtime and Python bindings:**
    ```bash
    sudo apt update
    sudo apt install -y hailo-all python3-hailort
    ```
-3. Verify Hailo-8 device detection:
+
+3. **Verify Hailo-8L device detection:**
    ```bash
    hailortcli scan
    ```
-4. Place the YOLOv8 person detection HEF model:
+
+4. **Download the Hailo-8L compatible YOLOv8 Person Detection model from the Hailo Model Zoo:**
    ```bash
-   cp yolov8s_person.hef /mnt/portrait/models/hailo/yolov8s_person.hef
+   wget -O /mnt/portrait/models/hailo/yolov8s_person.hef \
+     https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.13.0/hailo8l/yolov8s.hef
    ```
 
 ### Step 4: Piper TTS Setup
 
-1. Download the arm64 Piper binary and voice model:
+1. **Download and unpack the arm64 Piper binary and voice model:**
    ```bash
+   # Ensure SSD permissions are intact
+   sudo chown -R $USER:$USER /mnt/portrait
+
    cd /mnt/portrait/models/piper
    wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz
    tar -xzf piper_arm64.tar.gz

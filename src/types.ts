@@ -96,3 +96,21 @@ export interface CameraTriggerStatus {
   motionScore: number;
   lastTriggerAt: number | null;
 }
+
+export interface VisionLogEntry {
+  id: string;
+  timestamp: string;
+  level: "info" | "success" | "warn" | "error" | "scan";
+  message: string;
+  score?: number;
+  threshold?: number;
+}
+
+export interface CameraDeviceInfo {
+  label: string;
+  width: number;
+  height: number;
+  fps?: number;
+  facingMode?: string;
+}
+
