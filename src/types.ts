@@ -112,5 +112,6 @@ export interface CameraDeviceInfo {
   height: number;
   fps?: number;
   facingMode?: string;
+  isSimulated?: boolean;
 }
 

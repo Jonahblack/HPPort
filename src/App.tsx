@@ -63,7 +63,7 @@ const INITIAL_CONFIG: AppConfig = {
     language: "en-US",
     wake_word: "portrait",
     stop_phrase: "goodbye portrait",
-    gemini_model: "gemma-4-e2b-instruct",
+    gemini_model: "gemma-4-e2b-instruction",
     system_prompt:
       "You are Lord Cadogan, the eccentric, valiant knight sealed inside a magical Hogwarts portrait. You believe every conversation is a grand quest. Answer in 1 to 3 vivid sentences. Be bold, boast of slaying beasts, and challenge the user to noble deeds!",
     listen_timeout_seconds: 5.0,

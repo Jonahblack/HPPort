@@ -135,7 +135,7 @@ export const CameraCornerFeed: React.FC<CameraCornerFeedProps> = ({
           </span>
           <span className="text-[11px] font-cinzel font-bold text-amber-200 tracking-wide flex items-center gap-1">
             <Camera className="w-3 h-3 text-amber-400" />
-            PI 5 CAMERA FEED
+            {deviceInfo?.isSimulated ? "PI 5 SENSOR (SIM)" : "PI 5 CAMERA FEED"}
           </span>
         </div>
 

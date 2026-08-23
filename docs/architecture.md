@@ -72,7 +72,7 @@ $$\text{RMS} = \sqrt{\frac{1}{N}\sum_{i=1}^{N} x_i^2}$$
 /mnt/portrait/
 ├── models/
 │   ├── gemma/
-│   │   └── gemma-4-e2b-instruct.Q4_K_M.gguf
+│   │   └── gemma-4-e2b-instruction.Q4_K_M.gguf
 │   ├── stt/
 │   │   └── faster_whisper_tiny_en/
 │   ├── piper/

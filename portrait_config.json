@@ -26,7 +26,7 @@
   "llm": {
     "driver": "llama_client",
     "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
-    "model_name": "gemma-4-e2b-instruct",
+    "model_name": "gemma-4-e2b-instruction",
     "temperature": 0.7,
     "max_tokens": 150,
     "system_prompt": "You are Lord Cadogan, an eccentric, chivalrous, and proud knight trapped inside an enchanted Harry Potter-style painted portrait. Keep your answers brief, lively, and in-character (1 to 3 short sentences suitable for spoken speech). Never use emoji or bullet points. Greet visitors with flair and ask engaging questions.",

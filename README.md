@@ -124,9 +124,9 @@ Run the native Pygame application in demo mode on any desktop computer without n
 ### Connecting Local Gemma 4 via `llama.cpp` on Desktop (Optional)
 
 1. Build `llama.cpp` or install `llama-server`.
-2. Launch Gemma 4 E2B Instruct:
+2. Launch Gemma 4 E2B Instruction:
    ```bash
-   llama-server -m models/gemma-4-e2b-instruct.Q4_K_M.gguf --port 8080 -c 2048
+   llama-server -m models/gemma-4-e2b-instruction.Q4_K_M.gguf --port 8080 -c 2048
    ```
 3. Run the Python application without demo mocks:
    ```bash
@@ -189,16 +189,16 @@ mkdir -p /mnt/portrait/logs
    cmake --build build --config Release -j4
    ```
 
-2. **Download Gemma 4 E2B Instruct GGUF to SSD (Direct Unsloth GGUF, No HF token needed):**
+2. **Download Gemma 4 E2B Instruction GGUF to SSD (Direct Unsloth GGUF, No HF token needed):**
    ```bash
-   wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf \
+   wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf \
      https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
    ```
 
 3. **Start `llama-server` (loading model from SSD):**
    ```bash
    ~/llama.cpp/build/bin/llama-server \
-     -m /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf \
+     -m /mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf \
      --port 8080 \
      --host 127.0.0.1 \
      -t 4 \
@@ -268,7 +268,7 @@ Verify `/mnt/portrait` paths in `portrait_config.json`:
   "llm": {
     "driver": "llama_client",
     "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
-    "model_name": "gemma-4-e2b-instruct"
+    "model_name": "gemma-4-e2b-instruction"
   },
   "tts": {
     "driver": "piper",

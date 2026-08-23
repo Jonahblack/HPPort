@@ -52,16 +52,16 @@ cmake -B build -DGGML_NATIVE=ON
 cmake --build build --config Release -j4
 ```
 
-Download the quantized Gemma 4 E2B Instruct GGUF model directly via Unsloth (no HF authentication required):
+Download the quantized Gemma 4 E2B Instruction GGUF model directly via Unsloth (no HF authentication required):
 ```bash
-wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf \
+wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf \
   https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
 ```
 
 Start the persistent `llama-server` background service:
 ```bash
 ~/llama.cpp/build/bin/llama-server \
-  -m /mnt/portrait/models/gemma/gemma-4-e2b-instruct.Q4_K_M.gguf \
+  -m /mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf \
   --port 8080 \
   --host 127.0.0.1 \
   -t 4 \

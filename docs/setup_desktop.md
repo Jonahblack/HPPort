@@ -38,14 +38,14 @@ python main.py --demo
 - **`t`**: Injects sample spoken dialogue to test STT -> Gemma -> Piper -> Mouth Flapping.
 - **`Esc` or `q`**: Cleanly shuts down the application.
 
-## Testing with Local llama.cpp (Gemma 4 E2B Instruct)
+## Testing with Local llama.cpp (Gemma 4 E2B Instruction)
 
 If you have `llama-server` installed on your desktop:
 
-1. Download the Gemma 4 E2B Instruct GGUF model:
+1. Download the Gemma 4 E2B Instruction GGUF model:
    ```bash
    # Place in your local models folder
-   llama-server -m models/gemma-4-e2b-instruct.Q4_K_M.gguf --port 8080 -c 2048
+   llama-server -m models/gemma-4-e2b-instruction.Q4_K_M.gguf --port 8080 -c 2048
    ```
 
 2. In `portrait_config.json`, ensure:
