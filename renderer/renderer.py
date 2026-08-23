@@ -14,18 +14,32 @@ class PortraitRenderer:
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config.get("renderer", {})
+        self.audio_config = config.get("tts", {})
         self.width = int(self.config.get("width", 1024))
         self.height = int(self.config.get("height", 768))
         self.fullscreen = bool(self.config.get("fullscreen", False))
         self.fps = int(self.config.get("fps", 60))
         self.assets_dir = self.config.get("assets_dir", "assets")
 
+        audio_driver = str(self.audio_config.get("audio_driver", "auto")).strip().lower()
+        if audio_driver and audio_driver != "auto" and "SDL_AUDIODRIVER" not in os.environ:
+            os.environ["SDL_AUDIODRIVER"] = audio_driver
+
+        mixer_rate = int(self.audio_config.get("playback_sample_rate", 22050))
+        mixer_channels = int(self.audio_config.get("playback_channels", 1))
+        mixer_buffer = int(self.audio_config.get("playback_buffer_size", 512))
+
+        pygame.mixer.pre_init(frequency=mixer_rate, size=-16, channels=mixer_channels, buffer=mixer_buffer)
         pygame.init()
         pygame.font.init()
         try:
             pygame.mixer.init()
-        except Exception:
-            pass
+            print(
+                f"[Audio] Pygame mixer initialized "
+                f"({mixer_rate}Hz, channels={mixer_channels}, buffer={mixer_buffer})."
+            )
+        except Exception as exc:
+            print(f"[Audio] Pygame mixer initialization notice: {exc}")
 
         flags = pygame.FULLSCREEN if self.fullscreen else pygame.RESIZABLE
         self.screen = pygame.display.set_mode((self.width, self.height), flags)

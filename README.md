@@ -108,8 +108,13 @@ Run the native Pygame application in demo mode on any desktop computer without n
 
 2. **Install Python requirements:**
    ```bash
+   sudo apt update
+   sudo apt install -y python3-pip python3-venv python3-pyaudio ffmpeg
    pip install -r requirements.txt
    ```
+
+   On Raspberry Pi OS / Debian, do not mix `apt` and `pip` in one command. Install OS packages with `apt`, then activate your virtual environment and run `python -m pip install ...` separately.
+   If you are using Raspberry Pi OS `python3-picamera2` from `apt` inside a `--system-site-packages` venv, keep `numpy` below `2.0` or `picamera2` can fail with a binary incompatibility error like `numpy.dtype size changed`.
 
 3. **Run in Desktop Demo Mode:**
    ```bash
@@ -220,7 +225,7 @@ mkdir -p /mnt/portrait/logs
 2. **Install Hailo runtime and Python bindings:**
    ```bash
    sudo apt update
-   sudo apt install -y hailo-all python3-hailort
+   sudo apt install -y hailo-all python3-hailort python3-picamera2
    ```
 
 3. **Verify Hailo-8L device detection:**
@@ -268,12 +273,22 @@ Verify `/mnt/portrait` paths in `portrait_config.json`:
   "llm": {
     "driver": "llama_client",
     "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
-    "model_name": "gemma-4-e2b-instruction"
+    "model_name": "gemma-4-e2b-instruction",
+    "timeout_seconds": 90.0
+  },
+  "stt": {
+    "driver": "local_stt",
+    "microphone_device_index": null,
+    "microphone_name": "",
+    "sample_rate": null
   },
   "tts": {
     "driver": "piper",
     "piper_binary_path": "/mnt/portrait/models/piper/piper",
-    "model_path": "/mnt/portrait/models/piper/en_US-ryan-high.onnx"
+    "model_path": "/mnt/portrait/models/piper/en_US-ryan-high.onnx",
+    "audio_driver": "auto",
+    "playback_sample_rate": 22050,
+    "playback_channels": 1
   }
 }
 ```
@@ -335,7 +350,10 @@ sudo systemctl start portrait.service
 
 ### Raspberry Pi 5 Hardware Issues
 - **Hailo device not found (`hailortcli scan` empty)**: Check PCIe ribbon cable orientation, ensure `dtparam=pciex1` is in `/boot/firmware/config.txt`, and reboot.
-- **Audio device index errors in Python**: Run `python -c "import sounddevice; print(sounddevice.query_devices())"` to find your USB microphone and speaker device IDs.
+- **Microphone not detected**: Run `python tools/diagnose_audio.py` or `python -c "import speech_recognition as sr; print(list(enumerate(sr.Microphone.list_microphone_names())))"` and set `stt.microphone_device_index` or `stt.microphone_name` in `portrait_config.json`.
+- **Only a humming tone plays instead of speech**: Piper was not found or failed, so the app used the synthetic fallback. Verify the Piper binary exists under `/mnt/portrait/models/piper/` and watch for `[TTS] Using synthetic fallback audio` in the logs.
+- **Audio playback sounds distorted on Pi speakers**: Keep `tts.playback_sample_rate` at `22050` and `tts.playback_channels` at `1`, since Piper outputs 22.05 kHz mono WAV audio.
+- **llama-server seems up but replies still fail**: First verify it is actually listening with `curl http://127.0.0.1:8080/v1/models`. If that works, increase `llm.timeout_seconds` if the Pi is still prompt-processing when the client disconnects. A cancellation in the llama-server terminal after 10-20 seconds usually means the client timed out.
 - **Pygame display errors without desktop GUI**: Use SDL DirectFB/KMSDRM mode by setting `export SDL_VIDEODRIVER=kmsdrm` before launching `main.py`.
 
 ---
@@ -344,4 +362,3 @@ sudo systemctl start portrait.service
 
 - Inspired by the enchanted portraits of the Harry Potter universe.
 - Powered by **Google Gemma 4**, **Hailo AI**, **Rhasspy Piper**, and **Vite + React**.
-

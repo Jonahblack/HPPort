@@ -82,7 +82,7 @@ Start the persistent `llama-server` background service:
    ```
 2. Install Hailo runtime packages and Python bindings:
    ```bash
-   sudo apt update && sudo apt install -y hailo-all python3-hailort
+   sudo apt update && sudo apt install -y hailo-all python3-hailort python3-picamera2
    ```
 3. Verify device detection:
    ```bash

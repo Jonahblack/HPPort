@@ -1,30 +1,32 @@
-"""Hailo AI HAT (Hailo-8L) YOLOv8 person detector and camera streamer for Raspberry Pi 5."""
+"""Hailo AI HAT (Hailo-8L) vision pipeline with Raspberry Pi camera backends."""
 
-import time
 import os
 import threading
-from typing import Dict, Any, Optional, Tuple
+import time
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
 
 from vision.base import BaseVisionDetector
 
 
 class HailoVision(BaseVisionDetector):
-    """Hardware-accelerated person detection using Hailo-8L NPU on Raspberry Pi 5.
-    
-    Includes live camera frame capture (libcamera/v4l2/OpenCV) for corner PiP feed.
-    """
+    """Camera-backed detector for Raspberry Pi 5 with graceful backend fallback."""
 
     def __init__(self, config: Dict[str, Any]):
         vision_cfg = config.get("vision", {})
+        hardware_cfg = config.get("hardware", {})
+
         self.confidence_threshold = float(vision_cfg.get("confidence_threshold", 0.55))
         self.poll_interval = float(vision_cfg.get("poll_interval_seconds", 0.05))
         self.cam_width = int(vision_cfg.get("camera_width", 320))
         self.cam_height = int(vision_cfg.get("camera_height", 240))
         self.target_fps = int(vision_cfg.get("camera_fps", 30))
+        self.camera_backend = str(vision_cfg.get("camera_backend", "auto")).lower()
+        self.camera_device_index = int(vision_cfg.get("camera_device_index", 0))
 
         self.model_path = os.path.join(
-            config.get("hardware", {}).get("models_dir", "/mnt/portrait/models"),
+            hardware_cfg.get("models_dir", "/mnt/portrait/models"),
             "hailo",
             "yolov8s_person.hef",
         )
@@ -34,64 +36,56 @@ class HailoVision(BaseVisionDetector):
         self._latest_confidence = 0.0
         self._hailo_initialized = False
         self._camera_driver = "none"
+        self._camera_error = ""
+        self._manual_detect_until = 0.0
 
-        # Threading and camera variables
         self._capture_thread: Optional[threading.Thread] = None
-        self._latest_frame: Optional[Any] = None
+        self._latest_frame: Optional[np.ndarray] = None
         self._frame_lock = threading.Lock()
         self._fps_counter = 0.0
         self._frame_count = 0
         self._last_fps_calc = time.time()
         self._bounding_box: Optional[Tuple[int, int, int, int]] = None
-
-        # Previous frame for motion detection fallback
-        self._prev_gray = None
+        self._prev_gray: Optional[np.ndarray] = None
 
     def start(self) -> None:
-        """Initialize camera hardware and background capture thread."""
+        """Initialize Hailo runtime diagnostics and camera capture thread."""
         if self._running:
             return
 
         self._running = True
-        print(f"[Vision] Starting camera capture & Hailo-8L pipeline (Target: {self.cam_width}x{self.cam_height} @ {self.target_fps}fps)...")
+        print(
+            f"[Vision] Starting camera capture & Hailo-8L pipeline "
+            f"(Target: {self.cam_width}x{self.cam_height} @ {self.target_fps}fps, backend={self.camera_backend})..."
+        )
 
-        # 1. Attempt to initialize Hailo-8L Python SDK
         try:
-            import hailo  # type: ignore
+            import hailo  # type: ignore  # noqa: F401
+
             print(f"[Vision] HailoRT SDK loaded. HEF Model path: {self.model_path}")
             self._hailo_initialized = True
         except ImportError:
             print("[Vision] Notice: hailo python library not in current venv. Using optical motion / person analyzer.")
             self._hailo_initialized = False
 
-        # 2. Launch background frame grabber thread
+        if not os.path.exists(self.model_path):
+            print(f"[Vision] Notice: HEF model not found at {self.model_path}. Camera preview will still run.")
+
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._capture_thread.start()
 
-    def _capture_loop(self) -> None:
-        """Background thread grabbing camera frames and performing inference."""
-        cap = None
-        
-        # Try OpenCV VideoCapture (v4l2 / USB camera / libcamerify)
-        try:
-            import cv2  # type: ignore
-            # Try camera index 0
-            cap = cv2.VideoCapture(0)
-            if cap.isOpened():
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cam_width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cam_height)
-                cap.set(cv2.CAP_PROP_FPS, self.target_fps)
-                self._camera_driver = "v4l2_opencv"
-                print(f"[Vision] Connected to physical camera (/dev/video0 via OpenCV).")
-            else:
-                cap.release()
-                cap = None
-        except Exception as e:
-            cap = None
+    def simulate_detection(self, detected: bool, duration_seconds: float = 4.0) -> None:
+        """Support manual wake testing from the keyboard in hardware mode."""
+        if detected:
+            self._manual_detect_until = time.time() + duration_seconds
+            print(f"[Vision] Manual detection override enabled for {duration_seconds:.1f}s.")
+        else:
+            self._manual_detect_until = 0.0
+            print("[Vision] Manual detection override cleared.")
 
-        sim_tick = 0
-        sim_person_x = self.cam_width // 2
-        sim_person_vx = 2
+    def _capture_loop(self) -> None:
+        """Grab frames from the first working backend and run simple motion detection."""
+        source = self._open_camera_source()
 
         while self._running:
             loop_start = time.time()
@@ -100,79 +94,26 @@ class HailoVision(BaseVisionDetector):
             confidence = 0.0
             bbox = None
 
-            if cap is not None and cap.isOpened():
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    # Convert BGR to RGB
-                    import cv2  # type: ignore
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    h, w, _ = frame_rgb.shape
+            if source is not None:
+                frame_rgb = self._read_camera_frame(source)
 
-                    # 1. Optical Person / Motion Analysis
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    gray = cv2.GaussianBlur(gray, (21, 21), 0)
-
-                    if self._prev_gray is not None:
-                        frame_delta = cv2.absdiff(self._prev_gray, gray)
-                        thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
-                        thresh = cv2.dilate(thresh, None, iterations=2)
-                        contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-                        for c in contours:
-                            if cv2.contourArea(c) > 1500: # Threshold area for a person moving
-                                (x, y, cw, ch) = cv2.boundingRect(c)
-                                detected = True
-                                confidence = min(0.98, max(0.60, cv2.contourArea(c) / 8000.0))
-                                bbox = (x, y, cw, ch)
-                                break
-
-                    self._prev_gray = gray
-                else:
-                    time.sleep(0.05)
+            if frame_rgb is None:
+                frame_rgb = self._build_standby_frame()
             else:
-                # Synthetic Optical Sensor (Radar Simulation) when no hardware webcam is attached
-                self._camera_driver = "virtual_sensor"
-                sim_tick += 1
-                w, h = self.cam_width, self.cam_height
+                detected, confidence, bbox = self._analyze_frame(frame_rgb)
 
-                # Generate a thermal/optical radar grid frame
-                synth_frame = np.zeros((h, w, 3), dtype=np.uint8)
-                synth_frame[:, :] = [14, 22, 28] # Dark blue-grey background
-
-                # Grid pattern
-                synth_frame[::30, :, :] = [30, 48, 62]
-                synth_frame[:, ::30, :] = [30, 48, 62]
-
-                # Moving simulated visitor silhouette
-                sim_person_x += sim_person_vx
-                if sim_person_x < 50 or sim_person_x > w - 50:
-                    sim_person_vx *= -1
-
-                px, py = int(sim_person_x), h // 2
+            if time.time() < self._manual_detect_until:
                 detected = True
-                confidence = 0.88 + 0.08 * np.sin(sim_tick * 0.1)
-                bbox = (px - 28, py - 35, 56, 70)
+                confidence = max(confidence, 0.94)
+                if bbox is None:
+                    bbox = self._default_manual_bbox()
 
-                # Draw simulated radar signature
-                y_indices, x_indices = np.ogrid[:h, :w]
-                dist_from_center = np.sqrt((x_indices - px)**2 + (y_indices - py)**2)
-                mask = dist_from_center <= 35
-                synth_frame[mask] = [46, 180, 120] # Green thermal glow
-
-                # Draw scanline
-                scan_y = int((sim_tick * 3) % h)
-                synth_frame[scan_y : min(h, scan_y + 2), :, :] = [56, 189, 248]
-
-                frame_rgb = synth_frame
-
-            # Store latest frame and detection state
             with self._frame_lock:
                 self._latest_frame = frame_rgb
                 self._latest_detected = detected
                 self._latest_confidence = confidence
                 self._bounding_box = bbox
 
-            # Calculate FPS
             self._frame_count += 1
             now = time.time()
             if now - self._last_fps_calc >= 1.0:
@@ -180,29 +121,238 @@ class HailoVision(BaseVisionDetector):
                 self._frame_count = 0
                 self._last_fps_calc = now
 
-            # Sleep to maintain target rate
             elapsed = time.time() - loop_start
-            sleep_time = max(0.005, (1.0 / self.target_fps) - elapsed)
-            time.sleep(sleep_time)
+            time.sleep(max(0.005, (1.0 / self.target_fps) - elapsed))
 
-        if cap is not None:
+        self._close_camera_source(source)
+
+    def _open_camera_source(self) -> Optional[Dict[str, Any]]:
+        backends = self._candidate_backends()
+        errors = []
+
+        for backend in backends:
             try:
-                cap.release()
-            except Exception:
-                pass
+                if backend == "picamera2":
+                    source = self._open_picamera2()
+                elif backend == "gstreamer":
+                    source = self._open_opencv_capture(self._libcamera_gstreamer_pipeline(), "gstreamer_libcamera")
+                elif backend == "v4l2":
+                    source = self._open_opencv_capture(self.camera_device_index, "v4l2_opencv", api_preference="v4l2")
+                elif backend == "opencv":
+                    source = self._open_opencv_capture(self.camera_device_index, "opencv_default")
+                else:
+                    continue
+            except Exception as exc:
+                errors.append(f"{backend}: {exc}")
+                continue
+
+            if source is not None:
+                self._camera_error = ""
+                return source
+
+            errors.append(f"{backend}: unavailable")
+
+        self._camera_driver = "standby"
+        self._camera_error = "; ".join(errors) if errors else "No camera backend could be initialized."
+        print(f"[Vision] Camera startup failed. {self._camera_error}")
+        return None
+
+    def _candidate_backends(self) -> Tuple[str, ...]:
+        if self.camera_backend == "auto":
+            return ("picamera2", "gstreamer", "v4l2", "opencv")
+        mapping = {
+            "picamera2": ("picamera2",),
+            "gstreamer": ("gstreamer",),
+            "v4l2": ("v4l2",),
+            "opencv": ("opencv",),
+        }
+        return mapping.get(self.camera_backend, ("picamera2", "gstreamer", "v4l2", "opencv"))
+
+    def _open_picamera2(self) -> Optional[Dict[str, Any]]:
+        try:
+            from picamera2 import Picamera2  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("Picamera2 is not installed") from exc
+
+        picam = Picamera2()
+        config = picam.create_video_configuration(
+            main={"size": (self.cam_width, self.cam_height), "format": "RGB888"},
+            controls={"FrameDurationLimits": (int(1_000_000 / self.target_fps), int(1_000_000 / self.target_fps))},
+        )
+        picam.configure(config)
+        picam.start()
+        time.sleep(0.2)
+
+        test_frame = picam.capture_array()
+        if test_frame is None or getattr(test_frame, "size", 0) == 0:
+            picam.stop()
+            raise RuntimeError("Picamera2 returned an empty frame")
+
+        self._camera_driver = "picamera2"
+        print("[Vision] Connected to Raspberry Pi CSI camera via Picamera2.")
+        return {"type": "picamera2", "camera": picam}
+
+    def _libcamera_gstreamer_pipeline(self) -> str:
+        return (
+            "libcamerasrc ! "
+            f"video/x-raw,width={self.cam_width},height={self.cam_height},framerate={self.target_fps}/1 ! "
+            "videoconvert ! appsink drop=true max-buffers=1 sync=false"
+        )
+
+    def _open_opencv_capture(
+        self,
+        source_ref: Any,
+        driver_name: str,
+        api_preference: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            import cv2  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("opencv-python-headless is not installed") from exc
+
+        cap_args = [source_ref]
+        if api_preference == "v4l2":
+            cap_args.append(cv2.CAP_V4L2)
+        elif driver_name == "gstreamer_libcamera":
+            cap_args.append(cv2.CAP_GSTREAMER)
+
+        cap = cv2.VideoCapture(*cap_args)
+        if not cap.isOpened():
+            cap.release()
+            return None
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cam_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cam_height)
+        cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            cap.release()
+            return None
+
+        self._camera_driver = driver_name
+        source_label = source_ref if isinstance(source_ref, str) else f"/dev/video{self.camera_device_index}"
+        print(f"[Vision] Connected to physical camera via {driver_name} ({source_label}).")
+        return {"type": "opencv", "camera": cap}
+
+    def _read_camera_frame(self, source: Dict[str, Any]) -> Optional[np.ndarray]:
+        source_type = source["type"]
+
+        if source_type == "picamera2":
+            frame = source["camera"].capture_array()
+            if frame is None:
+                return None
+            return self._normalize_to_rgb(frame)
+
+        if source_type == "opencv":
+            ok, frame = source["camera"].read()
+            if not ok or frame is None:
+                return None
+            return self._normalize_to_rgb(frame, assume_bgr=True)
+
+        return None
+
+    def _close_camera_source(self, source: Optional[Dict[str, Any]]) -> None:
+        if source is None:
+            return
+
+        try:
+            if source["type"] == "picamera2":
+                source["camera"].stop()
+            elif source["type"] == "opencv":
+                source["camera"].release()
+        except Exception:
+            pass
+
+    def _normalize_to_rgb(self, frame: np.ndarray, assume_bgr: bool = False) -> np.ndarray:
+        if frame.ndim == 2:
+            frame = np.stack([frame] * 3, axis=-1)
+        elif frame.shape[2] == 4:
+            frame = frame[:, :, :3]
+
+        if assume_bgr:
+            frame = frame[:, :, ::-1]
+
+        if frame.dtype != np.uint8:
+            frame = np.clip(frame, 0, 255).astype(np.uint8)
+
+        return np.ascontiguousarray(frame)
+
+    def _analyze_frame(self, frame_rgb: np.ndarray) -> Tuple[bool, float, Optional[Tuple[int, int, int, int]]]:
+        try:
+            import cv2  # type: ignore
+        except ImportError:
+            return False, 0.0, None
+
+        gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+        gray = cv2.GaussianBlur(gray, (21, 21), 0)
+
+        if self._prev_gray is None:
+            self._prev_gray = gray
+            return False, 0.0, None
+
+        frame_delta = cv2.absdiff(self._prev_gray, gray)
+        thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
+        thresh = cv2.dilate(thresh, None, iterations=2)
+        contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        self._prev_gray = gray
+
+        largest_area = 0.0
+        best_bbox = None
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 1500 or area <= largest_area:
+                continue
+
+            x, y, width, height = cv2.boundingRect(contour)
+            largest_area = area
+            best_bbox = (x, y, width, height)
+
+        if best_bbox is None:
+            return False, 0.0, None
+
+        confidence = min(0.98, max(0.60, largest_area / 8000.0))
+        return confidence >= self.confidence_threshold, confidence, best_bbox
+
+    def _default_manual_bbox(self) -> Tuple[int, int, int, int]:
+        box_width = max(56, self.cam_width // 5)
+        box_height = max(70, self.cam_height // 3)
+        x = max(0, (self.cam_width - box_width) // 2)
+        y = max(0, (self.cam_height - box_height) // 2)
+        return (x, y, box_width, box_height)
+
+    def _build_standby_frame(self) -> np.ndarray:
+        frame = np.zeros((self.cam_height, self.cam_width, 3), dtype=np.uint8)
+        frame[:, :] = [18, 24, 28]
+        frame[::24, :, :] = [28, 36, 44]
+        frame[:, ::24, :] = [28, 36, 44]
+
+        band_y = int((time.time() * 30) % max(1, self.cam_height))
+        frame[band_y : min(self.cam_height, band_y + 2), :, :] = [120, 88, 42]
+
+        cx = self.cam_width // 2
+        cy = self.cam_height // 2
+        frame[max(0, cy - 28) : min(self.cam_height, cy + 28), max(0, cx - 2) : min(self.cam_width, cx + 2), :] = [196, 167, 108]
+        frame[max(0, cy - 2) : min(self.cam_height, cy + 2), max(0, cx - 28) : min(self.cam_width, cx + 28), :] = [196, 167, 108]
+
+        return frame
 
     def is_person_detected(self) -> bool:
         if not self._running:
             return False
+        if time.time() < self._manual_detect_until:
+            return True
         with self._frame_lock:
             return self._latest_detected
 
     def get_confidence(self) -> float:
+        if time.time() < self._manual_detect_until:
+            return max(0.94, self._latest_confidence)
         with self._frame_lock:
             return self._latest_confidence
 
     def get_latest_frame(self, target_size: Optional[Tuple[int, int]] = None) -> Optional[Any]:
-        """Returns the latest captured frame as a Pygame Surface."""
+        """Return the latest camera frame as a Pygame Surface."""
         with self._frame_lock:
             if self._latest_frame is None:
                 return None
@@ -211,24 +361,22 @@ class HailoVision(BaseVisionDetector):
 
         try:
             import pygame  # type: ignore
-            h, w, _ = frame.shape
-            surface = pygame.image.frombuffer(frame.tobytes(), (w, h), "RGB")
 
-            # Draw target bounding box on surface if person detected
+            height, width, _ = frame.shape
+            surface = pygame.image.frombuffer(frame.tobytes(), (width, height), "RGB")
+
             if bbox is not None:
                 bx, by, bw, bh = bbox
                 rect = pygame.Rect(bx, by, bw, bh)
                 pygame.draw.rect(surface, (52, 211, 153), rect, width=2)
-                # Corner brackets
-                cr = 8
-                # Top left
-                pygame.draw.line(surface, (56, 189, 248), (bx, by), (bx + cr, by), 2)
-                pygame.draw.line(surface, (56, 189, 248), (bx, by), (bx, by + cr), 2)
-                # Bottom right
-                pygame.draw.line(surface, (56, 189, 248), (bx + bw, by + bh), (bx + bw - cr, by + bh), 2)
-                pygame.draw.line(surface, (56, 189, 248), (bx + bw, by + bh), (bx + bw, by + bh - cr), 2)
 
-            if target_size and (target_size[0] != w or target_size[1] != h):
+                corner_radius = 8
+                pygame.draw.line(surface, (56, 189, 248), (bx, by), (bx + corner_radius, by), 2)
+                pygame.draw.line(surface, (56, 189, 248), (bx, by), (bx, by + corner_radius), 2)
+                pygame.draw.line(surface, (56, 189, 248), (bx + bw, by + bh), (bx + bw - corner_radius, by + bh), 2)
+                pygame.draw.line(surface, (56, 189, 248), (bx + bw, by + bh), (bx + bw, by + bh - corner_radius), 2)
+
+            if target_size and (target_size[0] != width or target_size[1] != height):
                 surface = pygame.transform.smoothscale(surface, target_size)
 
             return surface
@@ -236,14 +384,18 @@ class HailoVision(BaseVisionDetector):
             return None
 
     def get_status_info(self) -> Dict[str, Any]:
+        manual_override = time.time() < self._manual_detect_until
         with self._frame_lock:
             return {
                 "driver": self._camera_driver,
                 "hailo_initialized": self._hailo_initialized,
                 "active": self._running,
                 "fps": round(self._fps_counter, 1),
-                "detected": self._latest_detected,
-                "confidence": round(self._latest_confidence, 2),
+                "detected": self._latest_detected or manual_override,
+                "confidence": round(max(self._latest_confidence, 0.94 if manual_override else 0.0), 2),
+                "camera_error": self._camera_error,
+                "model_path": self.model_path,
+                "camera_backend": self.camera_backend,
             }
 
     def stop(self) -> None:

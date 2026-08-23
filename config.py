@@ -26,6 +26,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "driver": "hailo",
         "confidence_threshold": 0.55,
         "poll_interval_seconds": 0.1,
+        "camera_backend": "auto",
+        "camera_device_index": 0,
         "camera_width": 640,
         "camera_height": 480,
         "camera_fps": 30,
@@ -34,8 +36,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "driver": "llama_client",
         "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
         "model_name": "gemma-4-e2b-instruction",
-        "temperature": 0.7,
-        "max_tokens": 150,
+        "temperature": 0.35,
+        "max_tokens": 48,
+        "timeout_seconds": 90.0,
+        "connect_timeout_seconds": 5.0,
+        "history_turn_limit": 1,
         "system_prompt": (
             "You are Lord Cadogan, an eccentric, chivalrous, and proud knight trapped inside an enchanted "
             "Harry Potter-style painted portrait. Keep your answers brief, lively, and in-character "
@@ -53,6 +58,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "compute_type": "int8",
         "vad_filter": True,
         "energy_threshold": 300,
+        "microphone_device_index": None,
+        "microphone_name": "",
+        "sample_rate": None,
+        "chunk_size": 1024,
+        "arecord_device": "",
     },
     "tts": {
         "driver": "piper",
@@ -63,6 +73,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "length_scale": 1.0,
         "noise_scale": 0.667,
         "noise_w": 0.8,
+        "audio_driver": "auto",
+        "playback_sample_rate": 22050,
+        "playback_channels": 1,
+        "playback_buffer_size": 512,
     },
     "renderer": {
         "window_title": "Harry Potter Talking Portrait (Gemma 4)",

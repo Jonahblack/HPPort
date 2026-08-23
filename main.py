@@ -166,6 +166,10 @@ class TalkingPortraitApp:
             synth_latency = time.time() - synth_start
 
             print(f"[Pipeline] TTS Audio Ready in {synth_latency:.2f}s (Audio length: {duration:.2f}s)")
+            tts_engine = getattr(self.tts, "last_engine", "")
+            tts_error = getattr(self.tts, "last_error", "")
+            if tts_engine == "mock_fallback":
+                print(f"[Pipeline] Warning: TTS fallback audio active. {tts_error or 'Piper did not generate speech.'}")
             self.renderer.set_latency_metric("tts", f"{synth_latency:.2f}s")
             self.renderer.set_subtitle(text)
 
