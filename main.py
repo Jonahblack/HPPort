@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Harry Potter Talking Portrait - Gemma 4 on Raspberry Pi 5 with Hailo AI HAT.
 
-Main entry point integrating Vision (Hailo-8L), STT (faster-whisper), LLM (Gemma 4 via llama.cpp),
-TTS (Piper), Finite State Machine, and Pygame portrait lip-sync renderer.
+Main orchestrator integrating:
+- Vision: Hailo-8L YOLOv8 / USB camera / Pi Camera Module with live corner PiP feed
+- STT: Faster-Whisper / Microphone listener
+- LLM: Gemma 4 via local llama.cpp server
+- TTS: Piper neural voice with RMS mouth shape lip synchronization
+- State Machine: IDLE -> WAKE_PENDING -> GREETING -> LISTENING -> THINKING -> SPEAKING -> COOLDOWN
+- Renderer: Pygame 2D layered sprite animation with on-screen HUD & latency profiling
 """
 
 import os
@@ -71,6 +76,7 @@ class TalkingPortraitApp:
         self.running = True
         self.conversation_history = []
         self.current_audio_thread: Optional[threading.Thread] = None
+        self.is_listening_active = False
 
     def _on_state_change(self, new_state: PortraitState) -> None:
         """Handle state change side-effects."""
@@ -84,16 +90,17 @@ class TalkingPortraitApp:
             self._speak_phrase(greeting_prompt, on_complete=self.fsm.on_greeting_complete)
 
         elif new_state == PortraitState.LISTENING:
-            self.renderer.set_subtitle("Listening for your voice...")
-            # Spawn worker thread for listening
-            threading.Thread(target=self._listen_worker, daemon=True).start()
+            self.renderer.set_subtitle("Listening for your voice (or press 'T')...")
+            # Spawn worker thread for listening if not already running
+            if not self.is_listening_active:
+                threading.Thread(target=self._listen_worker, daemon=True).start()
 
         elif new_state == PortraitState.IDLE:
             self.renderer.set_subtitle("")
             self.renderer.set_audio_amplitude(0.0)
 
         elif new_state == PortraitState.COOLDOWN:
-            self.renderer.set_subtitle("Resting peacefully in the castle hall...")
+            self.renderer.set_subtitle("Resting peacefully in the castle corridor...")
             self.renderer.set_audio_amplitude(0.0)
 
     def _listen_worker(self) -> None:
@@ -101,33 +108,48 @@ class TalkingPortraitApp:
         if self.fsm.state != PortraitState.LISTENING:
             return
 
+        self.is_listening_active = True
+        stt_start = time.time()
         user_text = self.stt.listen_and_transcribe(timeout_seconds=3.0, max_duration_seconds=10.0)
+        stt_duration = time.time() - stt_start
+        self.is_listening_active = False
 
         if user_text and user_text.strip():
-            print(f"[STT] User said: \"{user_text}\"")
+            print(f"[STT] User utterance recognized: \"{user_text}\" (took {stt_duration:.2f}s)")
+            self.renderer.set_latency_metric("stt", f"{stt_duration:.2f}s")
             self.fsm.on_speech_detected()
-            self._generate_and_speak(user_text)
+            self._generate_and_speak(user_text, stt_duration=stt_duration)
         else:
             self.fsm.on_speech_silence()
 
-    def _generate_and_speak(self, user_text: str) -> None:
+    def _generate_and_speak(self, user_text: str, stt_duration: float = 0.0) -> None:
         """Generate LLM response and speak it."""
-        self.renderer.set_subtitle("Lord Cadogan is pondering...")
+        self.renderer.set_subtitle("Lord Cadogan is consulting Gemma 4...")
 
-        start_time = time.time()
-        reply = self.llm.generate_response(
-            user_message=user_text,
-            conversation_history=self.conversation_history,
-        )
-        llm_latency = time.time() - start_time
+        def worker():
+            turn_start = time.time()
+            llm_start = time.time()
+            reply = self.llm.generate_response(
+                user_message=user_text,
+                conversation_history=self.conversation_history,
+            )
+            llm_latency = time.time() - llm_start
+            self.renderer.set_latency_metric("llm_ttft", f"{llm_latency:.2f}s")
+            self.renderer.set_latency_metric("llm_total", f"{llm_latency:.2f}s")
 
-        # Update history
-        self.conversation_history.append({"role": "user", "content": user_text})
-        self.conversation_history.append({"role": "assistant", "content": reply})
+            # Update history
+            self.conversation_history.append({"role": "user", "content": user_text})
+            self.conversation_history.append({"role": "assistant", "content": reply})
 
-        print(f"[Pipeline] LLM Response generated in {llm_latency:.2f}s")
-        self.fsm.on_llm_response_ready()
-        self._speak_phrase(reply, on_complete=self.fsm.on_speaking_complete)
+            print(f"[Pipeline] LLM Response: \"{reply}\" ({llm_latency:.2f}s)")
+            self.fsm.on_llm_response_ready()
+            
+            total_turnaround = stt_duration + llm_latency
+            self.renderer.set_latency_metric("turnaround", f"{total_turnaround:.2f}s")
+
+            self._speak_phrase(reply, on_complete=self.fsm.on_speaking_complete)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _speak_phrase(self, text: str, on_complete: Optional[callable] = None) -> None:
         """Synthesize audio and play with mouth synchronization."""
@@ -143,7 +165,8 @@ class TalkingPortraitApp:
             out_path, duration = self.tts.synthesize_to_file(text, wav_path)
             synth_latency = time.time() - synth_start
 
-            print(f"[Pipeline] TTS Synthesized in {synth_latency:.2f}s (Audio length: {duration:.2f}s)")
+            print(f"[Pipeline] TTS Audio Ready in {synth_latency:.2f}s (Audio length: {duration:.2f}s)")
+            self.renderer.set_latency_metric("tts", f"{synth_latency:.2f}s")
             self.renderer.set_subtitle(text)
 
             # Analyze lip sync amplitudes
@@ -154,7 +177,7 @@ class TalkingPortraitApp:
                 sound = pygame.mixer.Sound(out_path)
                 sound.play()
             except Exception as e:
-                print(f"[Audio] Pygame sound play warning: {e}")
+                print(f"[Audio] Pygame sound play notice: {e}")
 
             # Animate mouth flap across duration
             frame_duration = 1.0 / self.renderer.fps
@@ -182,17 +205,19 @@ class TalkingPortraitApp:
     def run(self) -> None:
         """Main execution loop."""
         self.vision.start()
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 65)
         print("🪄  Harry Potter Talking Portrait (Gemma 4 on Pi 5)")
-        print("=" * 60)
-        print("Controls:")
+        print("=" * 65)
+        print("Live Controls:")
         print("  [SPACE]  : Trigger mock person detection (Wake Portrait)")
-        print("  [T]      : Inject simulated spoken phrase to STT")
-        print("  [ESC/Q]  : Quit")
-        print("=" * 60 + "\n")
+        print("  [T]      : Talk / Inject spoken phrase to STT")
+        print("  [C]      : Toggle Corner Live Camera PiP Feed")
+        print("  [H]      : Toggle Diagnostic / Latency HUD")
+        print("  [ESC/Q]  : Clean Shutdown")
+        print("=" * 65 + "\n")
 
         last_vision_poll = 0.0
-        vision_poll_interval = self.config["vision"].get("poll_interval_seconds", 0.1)
+        vision_poll_interval = float(self.config["vision"].get("poll_interval_seconds", 0.05))
 
         try:
             while self.running:
@@ -205,17 +230,33 @@ class TalkingPortraitApp:
                             self.running = False
                         elif event.key == pygame.K_SPACE:
                             if isinstance(self.vision, MockVision):
-                                self.vision.trigger(duration_seconds=3.0)
+                                self.vision.trigger(duration_seconds=4.0)
+                            elif isinstance(self.vision, HailoVision):
+                                self.vision.simulate_detection(True)
+                                print("[App] Manual person detection triggered via SPACEBAR.")
                         elif event.key == pygame.K_t:
-                            if isinstance(self.stt, KeyboardSTT):
-                                phrase = self.stt.inject_next_sample()
-                                print(f"[Demo] User utterance simulated: \"{phrase}\"")
+                            # Manually trigger dialogue turn
+                            if self.fsm.state in (PortraitState.IDLE, PortraitState.LISTENING, PortraitState.COOLDOWN):
+                                sample_utterance = "Greetings Lord Cadogan! What quest awaits us today?"
+                                print(f"[App] User utterance injected: \"{sample_utterance}\"")
+                                self.fsm.on_speech_detected()
+                                self._generate_and_speak(sample_utterance, stt_duration=0.1)
+                        elif event.key == pygame.K_c:
+                            self.renderer.toggle_camera_pip()
+                        elif event.key == pygame.K_h:
+                            self.renderer.toggle_debug_hud()
 
-                # 2. Poll Vision Sensor
+                # 2. Poll Vision Sensor & Update Camera Feed Surface
                 now = time.time()
                 if now - last_vision_poll >= vision_poll_interval:
                     detected = self.vision.is_person_detected()
                     self.fsm.on_person_frame(detected)
+                    
+                    # Update live camera frame in renderer
+                    cam_frame = self.vision.get_latest_frame()
+                    cam_status = self.vision.get_status_info()
+                    self.renderer.update_camera_frame(cam_frame, cam_status)
+                    
                     last_vision_poll = now
 
                 # 3. Update State Machine
