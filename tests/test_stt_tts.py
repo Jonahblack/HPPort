@@ -44,6 +44,15 @@ class TestSTTTTS(unittest.TestCase):
         selected = LocalSTT._choose_microphone_index(names, configured_name="usb pnp")
         self.assertEqual(selected, 1)
 
+    def test_microphone_selector_prefers_name_when_saved_index_is_stale(self):
+        names = ["USB PnP Sound Device", "vc4-hdmi-0"]
+        selected = LocalSTT._choose_microphone_index(
+            names,
+            configured_index=1,
+            configured_name="USB PnP Sound Device",
+        )
+        self.assertEqual(selected, 0)
+
     def test_microphone_selector_skips_output_like_devices(self):
         names = ["bcm2835 HDMI 1", "Monitor of Built-in Audio", "USB Mic"]
         selected = LocalSTT._choose_microphone_index(names)

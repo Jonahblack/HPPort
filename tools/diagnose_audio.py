@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+import argparse
+import array
 import json
+import math
 import os
 import signal
 import subprocess
 import sys
+import wave
 from contextlib import contextmanager
 from typing import Any, Dict
 
@@ -137,7 +141,72 @@ def diagnose_piper(config: Dict[str, Any]) -> None:
     print(f"model_exists = {os.path.exists(tts.model_path)}")
 
 
+def diagnose_microphone_capture(config: Dict[str, Any], duration_seconds: float) -> None:
+    print_section("USB microphone recording test")
+    stt_config = config.get("stt", {})
+    device = str(stt_config.get("arecord_device", "default"))
+    sample_rate = int(stt_config.get("sample_rate") or 44100)
+    duration = max(1, int(round(duration_seconds)))
+    output_path = "/tmp/hpport_mic_test.wav"
+    cmd = [
+        "arecord",
+        "-D",
+        device,
+        "-f",
+        "S16_LE",
+        "-r",
+        str(sample_rate),
+        "-c",
+        "1",
+        "-d",
+        str(duration),
+        output_path,
+    ]
+    print(f"Speak normally for {duration} seconds toward the microphone...")
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration + 4, check=False)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"arecord exit code {result.returncode}"
+        print(f"Capture failed: {detail}")
+        return
+
+    try:
+        with wave.open(output_path, "rb") as wav_file:
+            sample_width = wav_file.getsampwidth()
+            channels = wav_file.getnchannels()
+            frames = wav_file.readframes(wav_file.getnframes())
+        if sample_width != 2:
+            print(f"Captured {output_path}, but expected 16-bit samples and received {sample_width * 8}-bit audio.")
+            return
+
+        samples = array.array("h", frames)
+        if channels > 1:
+            samples = array.array("h", samples[::channels])
+        peak = max((abs(sample) for sample in samples), default=0)
+        rms = math.sqrt(sum(sample * sample for sample in samples) / max(1, len(samples)))
+        dbfs = 20.0 * math.log10(rms / 32768.0) if rms > 0 else float("-inf")
+        print(f"capture_file = {output_path}")
+        print(f"samples = {len(samples)}")
+        print(f"rms = {rms:.1f} ({dbfs:.1f} dBFS)")
+        print(f"peak = {peak} ({peak / 32768.0 * 100:.1f}% full scale)")
+        if peak < 100:
+            print("Result: effectively silent. Check USB connection, ALSA capture gain, and hardware mute.")
+        elif dbfs < -45:
+            print("Result: audio is present but very quiet. Raise the USB capture gain with alsamixer.")
+        else:
+            print(f"Result: microphone signal is present. Play it with: aplay {output_path}")
+    except Exception as exc:
+        print(f"Could not analyze captured WAV: {exc}")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Diagnose portrait microphone, speaker, and Piper setup")
+    parser.add_argument(
+        "--record-test",
+        type=float,
+        metavar="SECONDS",
+        help="record from the configured ALSA microphone and report signal levels",
+    )
+    args = parser.parse_args()
     config = load_config("portrait_config.json")
     print_section("Config")
     print(json.dumps({"stt": config.get("stt", {}), "tts": config.get("tts", {}), "llm": config.get("llm", {})}, indent=2))
@@ -147,6 +216,8 @@ def main() -> None:
     diagnose_sounddevice()
     diagnose_pyaudio()
     diagnose_piper(config)
+    if args.record_test is not None:
+        diagnose_microphone_capture(config, args.record_test)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Harry Potter Talking Portrait (Gemma 4 & Hailo AI)
 
-An interactive, ultra-low-latency talking portrait application inspired by the enchanted portraits of Hogwarts. It combines 2D layered facial sprite rendering, optical camera presence triggers, speech recognition, local or cloud LLM intelligence (**Gemma 4 / Gemini**), low-latency **Piper TTS**, and audio-synchronized lip-flapping.
+An interactive talking portrait application inspired by cinematic magical-school fantasy. It combines a 3D-rendered animated character, optical camera presence triggers, speech recognition, local or cloud LLM intelligence (**Gemma 4 / Gemini**), low-latency **Piper TTS**, and audio-synchronized speech animation.
 
 The project can be run in two modes:
 1. **Interactive Web Application** (React 18 + Vite + Express backend + Canvas 2D + Web Speech + Gemini API).
@@ -12,8 +12,8 @@ The project can be run in two modes:
 
 ```text
 +-------------------------------------------------------------------------+
-|                      Layered 2D Portrait Renderer                       |
-|   Base (Neutral) + Blink Overlay (Eyes Closed) + 3 Audio Mouth Sprites  |
+|                    Cinematic Character Frame Renderer                  |
+|      Neutral + Blink + Audio-Driven Mouth Frames + Ambient Motion      |
 +-------------------------------------------------------------------------+
                                     ^
                                     | (Audio RMS Amplitudes, Visual State)
@@ -30,13 +30,12 @@ The project can be run in two modes:
 +-------------+     +---------------+     +--------------+  +------------+
 ```
 
-### 2D Layered Sprite Rendering Rules
-- **Base Canvas Layer (`base.png`)**: Neutral portrait with open eyes and closed mouth.
-- **Eyes Closed Overlay (`eyes_closed.png`)**: Transparent eyelid + glasses overlay blitted during 150ms blinks.
-- **Mouth 1 Overlay (`mouth_1.png`)**: Closed resting mouth with beard/mustache ($\text{RMS} < 0.15$).
-- **Mouth 2 Overlay (`mouth_2.png`)**: Slightly open mouth with visible teeth ($0.15 \le \text{RMS} < 0.45$).
-- **Mouth 3 Overlay (`mouth_3.png`)**: Wide open mouth for loud vowels ($\text{RMS} \ge 0.45$).
-- **1:1 Alignment**: All overlay layers share identical canvas dimensions, eliminating coordinate offset math.
+### Cinematic Character Rendering Rules
+- **Production mode (`renderer.asset_mode: full_frames`)** uses matching 3D-rendered frames for neutral, blink, small speech, and wide speech poses.
+- **Lip synchronization** selects a speech frame from Piper WAV amplitude while natural blinking temporarily takes priority.
+- **Ambient animation** adds subtle camera drift, breathing motion, and procedural magical forest motes without requiring real-time 3D rendering.
+- **Legacy mode (`renderer.asset_mode: layered`)** remains available for transparent sprite overlays.
+- **1:1 Alignment**: Every character frame must use the same dimensions, camera, pose, lighting, and composition.
 
 ---
 
@@ -363,6 +362,7 @@ sudo systemctl start portrait.service
 ### Raspberry Pi 5 Hardware Issues
 - **Hailo device not found (`hailortcli scan` empty)**: Check PCIe ribbon cable orientation, ensure `dtparam=pciex1` is in `/boot/firmware/config.txt`, and reboot.
 - **Microphone not detected**: Run `python tools/diagnose_audio.py` or `python -c "import speech_recognition as sr; print(list(enumerate(sr.Microphone.list_microphone_names())))"` and set `stt.microphone_device_index` or `stt.microphone_name` in `portrait_config.json`.
+- **Microphone is listed but speech never registers**: Run `python tools/diagnose_audio.py --record-test 4`. It records `/tmp/hpport_mic_test.wav`, reports RMS/peak signal levels, and tells you whether the source is silent or merely too quiet. Play the result with `aplay /tmp/hpport_mic_test.wav`.
 - **Only a humming tone plays instead of speech**: Piper was not found or failed, so the app used the synthetic fallback. Verify the Piper binary and Ryan medium model exist under `/mnt/portrait/models/piper/` and watch for `[TTS] Using synthetic fallback audio` in the logs. Empty Gemma replies are now replaced before Piper runs.
 - **Audio playback sounds distorted on Pi speakers**: Keep `tts.playback_sample_rate` at `22050` and `tts.playback_channels` at `1`, since Piper outputs 22.05 kHz mono WAV audio.
 - **llama-server seems up but replies still fail**: First verify it is actually listening with `curl http://127.0.0.1:8080/v1/models`. If that works, increase `llm.timeout_seconds` if the Pi is still prompt-processing when the client disconnects. A cancellation in the llama-server terminal after 10-20 seconds usually means the client timed out.

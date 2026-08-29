@@ -77,6 +77,9 @@ class TalkingPortraitApp:
         self.conversation_history = []
         self.current_audio_thread: Optional[threading.Thread] = None
         self.is_listening_active = False
+        state_config = self.config.get("state_machine", {})
+        self.listen_timeout_seconds = float(state_config.get("silence_timeout_seconds", 3.0))
+        self.max_listen_duration_seconds = float(state_config.get("max_listen_duration_seconds", 10.0))
 
     def _on_state_change(self, new_state: PortraitState) -> None:
         """Handle state change side-effects."""
@@ -104,23 +107,39 @@ class TalkingPortraitApp:
             self.renderer.set_audio_amplitude(0.0)
 
     def _listen_worker(self) -> None:
-        """Background worker to listen for user speech."""
+        """Keep opening capture windows until speech arrives or the FSM leaves LISTENING."""
         if self.fsm.state != PortraitState.LISTENING:
             return
 
         self.is_listening_active = True
-        stt_start = time.time()
-        user_text = self.stt.listen_and_transcribe(timeout_seconds=3.0, max_duration_seconds=10.0)
-        stt_duration = time.time() - stt_start
-        self.is_listening_active = False
+        try:
+            while self.running and self.fsm.state == PortraitState.LISTENING:
+                stt_start = time.time()
+                user_text = self.stt.listen_and_transcribe(
+                    timeout_seconds=self.listen_timeout_seconds,
+                    max_duration_seconds=self.max_listen_duration_seconds,
+                )
+                stt_duration = time.time() - stt_start
 
-        if user_text and user_text.strip():
-            print(f"[STT] User utterance recognized: \"{user_text}\" (took {stt_duration:.2f}s)")
-            self.renderer.set_latency_metric("stt", f"{stt_duration:.2f}s")
-            self.fsm.on_speech_detected()
-            self._generate_and_speak(user_text, stt_duration=stt_duration)
-        else:
-            self.fsm.on_speech_silence()
+                # A keyboard-injected turn may have changed state while capture was blocked.
+                if not self.running or self.fsm.state != PortraitState.LISTENING:
+                    if user_text:
+                        print("[STT] Discarding microphone result because another turn is already active.")
+                    return
+
+                if user_text and user_text.strip():
+                    print(f"[STT] User utterance recognized: \"{user_text}\" (took {stt_duration:.2f}s)")
+                    self.renderer.set_latency_metric("stt", f"{stt_duration:.2f}s")
+                    self.fsm.on_speech_detected()
+                    self._generate_and_speak(user_text, stt_duration=stt_duration)
+                    return
+
+                self.fsm.on_speech_silence()
+                if self.fsm.state == PortraitState.LISTENING:
+                    self.renderer.set_subtitle("Still listening... speak toward the USB microphone.")
+                    print("[STT] Reopening microphone capture window.")
+        finally:
+            self.is_listening_active = False
 
     def _generate_and_speak(self, user_text: str, stt_duration: float = 0.0) -> None:
         """Generate LLM response and speak it."""

@@ -1,8 +1,9 @@
-"""Pygame-based Talking Portrait graphics renderer with layered sprite compositing & corner camera PiP feed."""
+"""Pygame cinematic character renderer with animated frames and corner camera PiP feed."""
 
 import os
 import time
 import math
+import random
 import pygame
 from typing import Dict, Any, Optional, Tuple
 from state_machine import PortraitState
@@ -10,7 +11,7 @@ from renderer.animation import BlinkController, LipSyncEngine
 
 
 class PortraitRenderer:
-    """Renders layered portrait artwork: Base -> Eyes Overlay -> Mouth Shapes (1,2,3) -> Subtitles -> Camera PiP -> HUD."""
+    """Render full character frames or legacy layers, followed by subtitles, camera PiP, and HUD."""
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config.get("renderer", {})
@@ -20,6 +21,9 @@ class PortraitRenderer:
         self.fullscreen = bool(self.config.get("fullscreen", False))
         self.fps = int(self.config.get("fps", 60))
         self.assets_dir = self.config.get("assets_dir", "assets")
+        self.asset_mode = str(self.config.get("asset_mode", "layered")).strip().lower()
+        self.camera_motion = bool(self.config.get("camera_motion", True))
+        self.ambient_motes = bool(self.config.get("ambient_motes", True))
 
         audio_driver = str(self.audio_config.get("audio_driver", "auto")).strip().lower()
         if audio_driver and audio_driver != "auto" and "SDL_AUDIODRIVER" not in os.environ:
@@ -66,7 +70,20 @@ class PortraitRenderer:
 
         # Sprites dictionary
         self.sprites: Dict[str, Optional[pygame.Surface]] = {}
+        self._scaled_sprite_cache: Dict[Tuple[str, int, int], pygame.Surface] = {}
         self._load_sprites()
+
+        particle_rng = random.Random(1492)
+        self.magic_motes = [
+            (
+                particle_rng.random(),
+                particle_rng.random(),
+                particle_rng.uniform(0.035, 0.085),
+                particle_rng.uniform(0.8, 2.2),
+                particle_rng.uniform(0.0, math.tau),
+            )
+            for _ in range(18)
+        ]
 
         # State and animation variables
         self.current_state = PortraitState.IDLE
@@ -93,13 +110,28 @@ class PortraitRenderer:
 
     def _load_sprites(self) -> None:
         """Load sprite image layers from assets directory with fallback naming support."""
-        filenames = {
-            "base": ["base.png", "cadogan_base.png"],
-            "eyes_closed": ["eyes_closed.png", "cadogan_eyes_closed.png"],
-            "mouth_1": ["mouth_1.png", "cadogan_mouth_1.png"],
-            "mouth_2": ["mouth_2.png", "cadogan_mouth_2.png"],
-            "mouth_3": ["mouth_3.png", "cadogan_mouth_3.png"],
-        }
+        if self.asset_mode == "full_frames":
+            filenames = {
+                "base": ["forest_warrior_neutral.png", "base.png"],
+                "eyes_closed": ["forest_warrior_blink.png", "eyes_closed.png"],
+                "mouth_1": ["forest_warrior_neutral.png", "mouth_1.png"],
+                "mouth_2": ["forest_warrior_mouth_2.png", "mouth_2.png"],
+                "mouth_3": ["forest_warrior_mouth_3.png", "mouth_3.png"],
+            }
+        else:
+            filenames = {
+                "base": ["base.png", "cadogan_base.png"],
+                "eyes_closed": ["eyes_closed.png", "cadogan_eyes_closed.png"],
+                "mouth_1": ["mouth_1.png", "cadogan_mouth_1.png"],
+                "mouth_2": ["mouth_2.png", "cadogan_mouth_2.png"],
+                "mouth_3": ["mouth_3.png", "cadogan_mouth_3.png"],
+            }
+
+        configured_files = self.config.get("sprite_files", {})
+        if isinstance(configured_files, dict):
+            for key, filename in configured_files.items():
+                if key in filenames and isinstance(filename, str) and filename:
+                    filenames[key].insert(0, filename)
 
         for key, candidates in filenames.items():
             loaded = False
@@ -116,6 +148,30 @@ class PortraitRenderer:
                         print(f"[Renderer] Failed to load {path}: {e}")
             if not loaded:
                 self.sprites[key] = None
+
+    def _scaled_sprite(self, key: str, sprite: pygame.Surface, size: Tuple[int, int]) -> pygame.Surface:
+        cache_key = (key, size[0], size[1])
+        cached = self._scaled_sprite_cache.get(cache_key)
+        if cached is None:
+            cached = pygame.transform.smoothscale(sprite, size)
+            self._scaled_sprite_cache[cache_key] = cached
+        return cached
+
+    def _draw_magic_motes(self, canvas_rect: pygame.Rect) -> None:
+        if not self.ambient_motes:
+            return
+
+        mote_layer = pygame.Surface(canvas_rect.size, pygame.SRCALPHA)
+        for x_ratio, y_ratio, speed, radius, phase in self.magic_motes:
+            x = int(x_ratio * canvas_rect.width + math.sin(self.anim_time * 0.35 + phase) * 7)
+            y_ratio_now = (y_ratio - self.anim_time * speed * 0.012) % 1.0
+            y = int(y_ratio_now * canvas_rect.height)
+            pulse = 0.55 + 0.45 * math.sin(self.anim_time * 1.8 + phase)
+            alpha = int(45 + 80 * pulse)
+            core_radius = max(1, int(radius * 2.0))
+            pygame.draw.circle(mote_layer, (242, 196, 82, alpha // 3), (x, y), core_radius + 4)
+            pygame.draw.circle(mote_layer, (255, 224, 132, alpha), (x, y), core_radius)
+        self.screen.blit(mote_layer, canvas_rect.topleft)
 
     def set_state(self, state: PortraitState) -> None:
         self.current_state = state
@@ -231,7 +287,31 @@ class PortraitRenderer:
         mouth_sprite_key = f"mouth_{self.current_mouth_index}"
         mouth_sprite = self.sprites.get(mouth_sprite_key)
 
-        if base_sprite is not None:
+        if base_sprite is not None and self.asset_mode == "full_frames":
+            if is_blinking and eyes_closed_sprite is not None:
+                frame_key = "eyes_closed"
+            elif self.current_mouth_index > 1 and mouth_sprite is not None:
+                frame_key = mouth_sprite_key
+            else:
+                frame_key = "base"
+
+            frame_sprite = self.sprites.get(frame_key) or base_sprite
+            bw, bh = frame_sprite.get_size()
+            overscan = 1.025 if self.camera_motion else 1.0
+            scale = max(canvas_rect.width / bw, canvas_rect.height / bh) * overscan
+            target_size = (int(bw * scale), int(bh * scale))
+            drift_x = math.sin(self.anim_time * 0.23) * 3.0 if self.camera_motion else 0.0
+            drift_y = breath_offset + math.sin(self.anim_time * 0.17) * 2.0 if self.camera_motion else 0.0
+            dest_x = canvas_rect.centerx - target_size[0] // 2 + int(drift_x)
+            dest_y = canvas_rect.centery - target_size[1] // 2 + int(drift_y)
+
+            scaled_frame = self._scaled_sprite(frame_key, frame_sprite, target_size)
+            previous_clip = self.screen.get_clip()
+            self.screen.set_clip(canvas_rect)
+            self.screen.blit(scaled_frame, (dest_x, dest_y))
+            self.screen.set_clip(previous_clip)
+            self._draw_magic_motes(canvas_rect)
+        elif base_sprite is not None:
             # Scale to fit inner canvas keeping aspect ratio
             bw, bh = base_sprite.get_size()
             scale = min(canvas_rect.width / bw, canvas_rect.height / bh)
@@ -241,17 +321,17 @@ class PortraitRenderer:
             dest_y = canvas_rect.centery - target_size[1] // 2 + int(breath_offset)
 
             # Draw Layer 1: Base Portrait
-            scaled_base = pygame.transform.smoothscale(base_sprite, target_size)
+            scaled_base = self._scaled_sprite("base", base_sprite, target_size)
             self.screen.blit(scaled_base, (dest_x, dest_y))
 
             # Draw Layer 2: Eyes Closed Overlay (when blinking)
             if is_blinking and eyes_closed_sprite is not None:
-                scaled_eyes = pygame.transform.smoothscale(eyes_closed_sprite, target_size)
+                scaled_eyes = self._scaled_sprite("eyes_closed", eyes_closed_sprite, target_size)
                 self.screen.blit(scaled_eyes, (dest_x, dest_y))
 
             # Draw Layer 3: Mouth Overlay (Mouth 1, 2, 3)
             if mouth_sprite is not None:
-                scaled_mouth = pygame.transform.smoothscale(mouth_sprite, target_size)
+                scaled_mouth = self._scaled_sprite(mouth_sprite_key, mouth_sprite, target_size)
                 self.screen.blit(scaled_mouth, (dest_x, dest_y))
         else:
             # High quality procedural painting

@@ -17,7 +17,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "state_machine": {
         "wake_confirm_frames": 3,
         "wake_confirm_timeout_seconds": 1.5,
-        "silence_timeout_seconds": 2.0,
+        "silence_timeout_seconds": 4.0,
         "max_listen_duration_seconds": 10.0,
         "max_consecutive_silence": 2,
         "cooldown_duration_seconds": 8.0,
@@ -45,7 +45,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "disable_reasoning": True,
         "empty_response_text": "The castle spirits stole my answer. Ask once more, brave visitor!",
         "system_prompt": (
-            "You are Lord Cadogan, a bold eccentric knight in an enchanted portrait. "
+            "You are Lord Cadogan, a bold eccentric forest guardian and noble warrior in an enchanted portrait. "
             "Answer in one lively spoken sentence under 20 words."
         ),
         "greeting_prompt": "Ah, a visitor arrives before my frame! State your business, noble wanderer!",
@@ -59,6 +59,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "compute_type": "int8",
         "vad_filter": True,
         "energy_threshold": 300,
+        "dynamic_energy_threshold": True,
+        "ambient_calibration_seconds": 0.3,
         "microphone_device_index": None,
         "microphone_name": "",
         "sample_rate": None,
@@ -88,6 +90,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "fullscreen": False,
         "fps": 60,
         "assets_dir": "assets",
+        "asset_mode": "full_frames",
+        "sprite_files": {
+            "base": "forest_warrior_neutral.png",
+            "eyes_closed": "forest_warrior_blink.png",
+            "mouth_1": "forest_warrior_neutral.png",
+            "mouth_2": "forest_warrior_mouth_2.png",
+            "mouth_3": "forest_warrior_mouth_3.png",
+        },
+        "camera_motion": True,
+        "ambient_motes": True,
         "blink_min_seconds": 2.0,
         "blink_max_seconds": 5.0,
         "blink_duration_ms": 150,

@@ -33,6 +33,8 @@ class LocalSTT(BaseSTT):
         self.compute_type = stt_cfg.get("compute_type", "int8")
         self.vad_filter = stt_cfg.get("vad_filter", True)
         self.energy_threshold = int(stt_cfg.get("energy_threshold", 300))
+        self.dynamic_energy_threshold = bool(stt_cfg.get("dynamic_energy_threshold", True))
+        self.ambient_calibration_seconds = float(stt_cfg.get("ambient_calibration_seconds", 0.3))
         self.microphone_device_index = self._coerce_optional_int(stt_cfg.get("microphone_device_index"))
         self.microphone_name = str(stt_cfg.get("microphone_name", "")).strip()
         self.sample_rate = self._coerce_optional_int(stt_cfg.get("sample_rate"))
@@ -47,6 +49,7 @@ class LocalSTT(BaseSTT):
         self._selected_device_name = ""
         self._selected_sample_rate: Optional[int] = None
         self._use_arecord_fallback = False
+        self._ambient_calibrated = False
 
         self._init_audio_input()
         self._init_model()
@@ -73,14 +76,14 @@ class LocalSTT(BaseSTT):
         configured_name: str = "",
         preferred_index: Optional[int] = None,
     ) -> Optional[int]:
-        if configured_index is not None and 0 <= configured_index < len(names):
-            return configured_index
-
         if configured_name:
             needle = configured_name.lower()
             for index, name in enumerate(names):
                 if needle in name.lower():
                     return index
+
+        if configured_index is not None and 0 <= configured_index < len(names):
+            return configured_index
 
         if preferred_index is not None and 0 <= preferred_index < len(names):
             return preferred_index
@@ -189,7 +192,7 @@ class LocalSTT(BaseSTT):
 
             self.recognizer = sr.Recognizer()
             self.recognizer.energy_threshold = self.energy_threshold
-            self.recognizer.dynamic_energy_threshold = True
+            self.recognizer.dynamic_energy_threshold = self.dynamic_energy_threshold
             self.recognizer.pause_threshold = 0.8
 
             device_names = self._list_audio_devices()
@@ -263,7 +266,16 @@ class LocalSTT(BaseSTT):
 
         try:
             with self.microphone as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                if not self._ambient_calibrated and self.ambient_calibration_seconds > 0:
+                    self.recognizer.adjust_for_ambient_noise(
+                        source,
+                        duration=self.ambient_calibration_seconds,
+                    )
+                    self._ambient_calibrated = True
+                    print(
+                        f"[STT] Ambient calibration complete "
+                        f"(energy_threshold={self.recognizer.energy_threshold:.0f})."
+                    )
                 audio_data = self.recognizer.listen(
                     source,
                     timeout=timeout_seconds,
@@ -301,6 +313,16 @@ class LocalSTT(BaseSTT):
             return None
         except Exception as exc:
             print(f"[STT] Audio listen error: {exc}")
+            lowered = str(exc).lower()
+            device_error_markers = (
+                "invalid input device",
+                "invalid sample rate",
+                "device unavailable",
+                "no default input",
+                "unanticipated host error",
+            )
+            if any(marker in lowered for marker in device_error_markers):
+                self._init_arecord_fallback(str(exc))
             return None
 
     def _listen_with_arecord(self, max_duration_seconds: float = 10.0) -> Optional[str]:
