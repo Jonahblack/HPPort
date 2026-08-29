@@ -1,7 +1,9 @@
 """Piper local neural TTS engine driver for Raspberry Pi 5 / Desktop."""
 import os
+import hashlib
 import shutil
 import subprocess
+import threading
 import time
 import wave
 from typing import Any, Dict, List, Tuple
@@ -15,16 +17,26 @@ class PiperTTS(BaseTTS):
     def __init__(self, config: Dict[str, Any]):
         tts_cfg = config.get("tts", {})
         self.piper_binary = tts_cfg.get("piper_binary_path", "/mnt/portrait/models/piper/piper")
-        self.model_path = tts_cfg.get("model_path", "/mnt/portrait/models/piper/en_US-ryan-high.onnx")
-        self.model_config = tts_cfg.get("model_config_path", "/mnt/portrait/models/piper/en_US-ryan-high.onnx.json")
+        self.model_path = tts_cfg.get("model_path", "/mnt/portrait/models/piper/en_US-ryan-medium.onnx")
+        self.model_config = tts_cfg.get("model_config_path", "/mnt/portrait/models/piper/en_US-ryan-medium.onnx.json")
         self.speaker_id = int(tts_cfg.get("speaker_id", 0))
         self.length_scale = float(tts_cfg.get("length_scale", 1.0))
         self.noise_scale = float(tts_cfg.get("noise_scale", 0.667))
         self.noise_w = float(tts_cfg.get("noise_w", 0.8))
+        self.cache_enabled = bool(tts_cfg.get("cache_enabled", True))
+        self.cache_dir = tts_cfg.get(
+            "cache_dir",
+            os.path.join(config.get("hardware", {}).get("cache_dir", "/tmp"), "tts"),
+        )
+        self.empty_text_fallback = tts_cfg.get(
+            "empty_text_fallback",
+            "The castle spirits stole my words. Ask me again, brave visitor!",
+        )
 
         self.last_engine = "uninitialized"
         self.last_error = ""
         self._runtime_bundle_dir = ""
+        self._synthesis_lock = threading.Lock()
 
         self._find_piper()
 
@@ -86,27 +98,39 @@ class PiperTTS(BaseTTS):
         start_time = time.time()
         self.last_engine = "unknown"
         self.last_error = ""
+        text = (text or "").strip()
+        if not text:
+            self.last_error = "Piper received empty text from the response pipeline"
+            text = self.empty_text_fallback
+            print(f"[TTS] {self.last_error}; speaking recovery text instead.")
 
         if not os.path.exists(self.model_path):
             self.last_error = f"Piper voice model not found at {self.model_path}"
             print(f"[TTS] {self.last_error}")
             return self._create_fallback_audio(output_wav_path, text)
 
-        if self._is_executable_file(self.piper_binary):
-            result = self._run_piper(self.piper_binary, text, output_wav_path, start_time)
-            if result is not None:
-                return result
+        with self._synthesis_lock:
+            cached = self._restore_cached_audio(text, output_wav_path, start_time)
+            if cached is not None:
+                return cached
 
-            if self._should_retry_from_tmp():
-                staged_binary = self._stage_runtime_bundle_to_tmp()
-                if staged_binary:
-                    print(f"[TTS] Retrying Piper from temporary runtime bundle: {staged_binary}")
-                    result = self._run_piper(staged_binary, text, output_wav_path, start_time)
-                    if result is not None:
-                        return result
-        else:
-            self.last_error = f"Piper executable not found at {self.piper_binary}"
-            print(f"[TTS] {self.last_error}")
+            if self._is_executable_file(self.piper_binary):
+                result = self._run_piper(self.piper_binary, text, output_wav_path, start_time)
+                if result is not None:
+                    self._cache_audio(text, output_wav_path)
+                    return result
+
+                if self._should_retry_from_tmp():
+                    staged_binary = self._stage_runtime_bundle_to_tmp()
+                    if staged_binary:
+                        print(f"[TTS] Retrying Piper from temporary runtime bundle: {staged_binary}")
+                        result = self._run_piper(staged_binary, text, output_wav_path, start_time)
+                        if result is not None:
+                            self._cache_audio(text, output_wav_path)
+                            return result
+            else:
+                self.last_error = f"Piper executable not found at {self.piper_binary}"
+                print(f"[TTS] {self.last_error}")
 
         return self._create_fallback_audio(output_wav_path, text)
 
@@ -144,7 +168,7 @@ class PiperTTS(BaseTTS):
             )
             _stdout, stderr = process.communicate(input=text)
 
-            if process.returncode == 0 and os.path.exists(output_wav_path):
+            if process.returncode == 0 and self._is_valid_wav(output_wav_path):
                 duration = self._get_wav_duration(output_wav_path)
                 self.last_engine = "piper"
                 synth_time = time.time() - start_time
@@ -165,6 +189,51 @@ class PiperTTS(BaseTTS):
             self.last_error = f"Piper execution error: {exc}"
             print(f"[TTS] {self.last_error}")
             return None
+
+    @staticmethod
+    def _is_valid_wav(wav_path: str) -> bool:
+        try:
+            with wave.open(wav_path, "rb") as wav_file:
+                return wav_file.getnframes() > 0 and wav_file.getframerate() > 0
+        except (OSError, EOFError, wave.Error):
+            return False
+
+    def _cache_path(self, text: str) -> str:
+        cache_key = "|".join(
+            (
+                os.path.abspath(self.model_path),
+                str(self.speaker_id),
+                str(self.length_scale),
+                str(self.noise_scale),
+                str(self.noise_w),
+                text,
+            )
+        )
+        digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()
+        return os.path.join(self.cache_dir, f"{digest}.wav")
+
+    def _restore_cached_audio(
+        self, text: str, output_wav_path: str, start_time: float
+    ) -> Tuple[str, float] | None:
+        if not self.cache_enabled:
+            return None
+        cache_path = self._cache_path(text)
+        if not self._is_valid_wav(cache_path):
+            return None
+        shutil.copyfile(cache_path, output_wav_path)
+        duration = self._get_wav_duration(output_wav_path)
+        self.last_engine = "piper_cache"
+        print(f"[TTS] Restored cached Piper audio in {time.time() - start_time:.2f}s")
+        return output_wav_path, duration
+
+    def _cache_audio(self, text: str, wav_path: str) -> None:
+        if not self.cache_enabled or not self._is_valid_wav(wav_path):
+            return
+        try:
+            os.makedirs(self.cache_dir, exist_ok=True)
+            shutil.copyfile(wav_path, self._cache_path(text))
+        except OSError as exc:
+            print(f"[TTS] Audio cache notice: {exc}")
 
     def _should_retry_from_tmp(self) -> bool:
         lowered = self.last_error.lower()

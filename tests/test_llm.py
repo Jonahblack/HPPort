@@ -54,6 +54,45 @@ class TestLLM(unittest.TestCase):
         resolved = client._resolve_model_name()
         self.assertEqual(resolved, "/mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf")
 
+    @patch("llm.llama_client.requests.post")
+    def test_llama_empty_content_uses_spoken_recovery(self, mock_post):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {"content": "", "reasoning_content": "hidden work"},
+                }
+            ],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 24},
+        }
+        mock_post.return_value = mock_response
+
+        config = {"llm": {"empty_response_text": "Please ask again."}}
+        client = LlamaClient(config)
+        client._resolved_model_name = "test-model"
+
+        self.assertEqual(client.generate_response("Hello"), "Please ask again.")
+
+    @patch("llm.llama_client.requests.post")
+    def test_llama_request_disables_thinking_and_limits_output(self, mock_post):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "choices": [{"finish_reason": "stop", "message": {"content": "Onward!"}}]
+        }
+        mock_post.return_value = mock_response
+
+        client = LlamaClient({"llm": {"max_tokens": 24, "disable_reasoning": True}})
+        client._resolved_model_name = "test-model"
+        client.generate_response("Hello")
+
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["max_tokens"], 24)
+        self.assertEqual(payload["n_predict"], 24)
+        self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,10 +16,16 @@ class LlamaClient(BaseLLMClient):
         )
         self.model_name = llm_cfg.get("model_name", "gemma-4-e2b-instruction")
         self.temperature = float(llm_cfg.get("temperature", 0.7))
-        self.max_tokens = int(llm_cfg.get("max_tokens", 150))
+        self.max_tokens = int(llm_cfg.get("max_tokens", 24))
         self.timeout = float(llm_cfg.get("timeout_seconds", 90.0))
         self.connect_timeout = float(llm_cfg.get("connect_timeout_seconds", 5.0))
         self.history_turn_limit = int(llm_cfg.get("history_turn_limit", 4))
+        self.cache_prompt = bool(llm_cfg.get("cache_prompt", True))
+        self.disable_reasoning = bool(llm_cfg.get("disable_reasoning", True))
+        self.empty_response_text = llm_cfg.get(
+            "empty_response_text",
+            "The castle spirits stole my answer. Ask once more, brave visitor!",
+        )
         self._resolved_model_name: Optional[str] = None
         self.system_prompt = llm_cfg.get(
             "system_prompt",
@@ -115,7 +121,7 @@ class LlamaClient(BaseLLMClient):
             max_history_messages = max(0, self.history_turn_limit * 2)
             for item in conversation_history[-max_history_messages:]:
                 role = item.get("role", "user")
-                if role in ("user", "assistant", "system"):
+                if role in ("user", "assistant"):
                     messages.append({"role": role, "content": item.get("content", "")})
 
         messages.append({"role": "user", "content": user_message})
@@ -127,7 +133,11 @@ class LlamaClient(BaseLLMClient):
             "max_tokens": self.max_tokens,
             "n_predict": self.max_tokens,
             "stream": False,
+            "cache_prompt": self.cache_prompt,
         }
+        if self.disable_reasoning:
+            # Supported by llama.cpp chat templates that expose optional thinking.
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         start_time = time.time()
         try:
@@ -140,8 +150,35 @@ class LlamaClient(BaseLLMClient):
 
             if resp.status_code == 200:
                 data = resp.json()
-                reply = data["choices"][0]["message"]["content"].strip()
-                print(f"[LLM] Gemma 4 completed in {duration:.2f}s: \"{reply}\"")
+                choice = data.get("choices", [{}])[0]
+                message = choice.get("message", {})
+                content = message.get("content", "")
+                if isinstance(content, list):
+                    content = "".join(
+                        item.get("text", "") for item in content if isinstance(item, dict)
+                    )
+                reply = content.strip() if isinstance(content, str) else ""
+
+                timings = data.get("timings", {})
+                usage = data.get("usage", {})
+                prompt_tokens = usage.get("prompt_tokens", timings.get("prompt_n", "?"))
+                output_tokens = usage.get("completion_tokens", timings.get("predicted_n", "?"))
+                output_rate = timings.get("predicted_per_second")
+                rate_text = f", {output_rate:.2f} tok/s" if isinstance(output_rate, (int, float)) else ""
+                print(
+                    f"[LLM] Gemma 4 completed in {duration:.2f}s "
+                    f"(prompt={prompt_tokens}, output={output_tokens}{rate_text}, "
+                    f"finish={choice.get('finish_reason', 'unknown')}): \"{reply}\""
+                )
+
+                if not reply:
+                    reasoning = message.get("reasoning_content", "")
+                    detail = " after producing hidden reasoning" if reasoning else ""
+                    print(
+                        f"[LLM] Empty visible response{detail}; using spoken recovery text. "
+                        "Restart llama-server with --reasoning off --reasoning-budget 0 if this repeats."
+                    )
+                    return self.empty_response_text
                 return reply
             else:
                 print(f"[LLM] Server returned HTTP {resp.status_code}: {resp.text}")

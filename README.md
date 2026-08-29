@@ -207,8 +207,18 @@ mkdir -p /mnt/portrait/logs
      --port 8080 \
      --host 127.0.0.1 \
      -t 4 \
-     -c 2048
+     -tb 4 \
+     -c 512 \
+     -np 1 \
+     -b 256 \
+     -ub 256 \
+     --flash-attn on \
+     --reasoning off \
+     --reasoning-budget 0 \
+     --no-webui
    ```
+
+   The portrait handles one conversation at a time, so one server slot and a 512-token context avoid wasting Pi memory and CPU. Disabling reasoning is important: hidden reasoning can consume the short output budget and leave no text for Piper.
 
 ### Step 3: Hailo AI HAT+ (13 TOPS / Hailo-8L) Vision Setup
 
@@ -249,9 +259,11 @@ mkdir -p /mnt/portrait/logs
    cd /mnt/portrait/models/piper
    wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz
    tar -xzf piper_arm64.tar.gz
-   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx
-   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx.json
+   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx
+   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json
    ```
+
+   The Ryan medium voice is the V1 default. On a Pi 5 it is much faster than the 121 MB high voice, and repeated phrases such as the greeting are cached under `/mnt/portrait/cache/tts`.
 
 ### Step 5: Configuration (`portrait_config.json`)
 
@@ -285,7 +297,7 @@ Verify `/mnt/portrait` paths in `portrait_config.json`:
   "tts": {
     "driver": "piper",
     "piper_binary_path": "/mnt/portrait/models/piper/piper",
-    "model_path": "/mnt/portrait/models/piper/en_US-ryan-high.onnx",
+    "model_path": "/mnt/portrait/models/piper/en_US-ryan-medium.onnx",
     "audio_driver": "auto",
     "playback_sample_rate": 22050,
     "playback_channels": 1
@@ -333,11 +345,11 @@ sudo systemctl start portrait.service
 
 | Subsystem | Processing Time | Mechanism |
 | :--- | :--- | :--- |
-| **STT (Speech to Text)** | ~0.55s – 0.65s | faster-whisper `tiny.en` on 4 CPU threads |
-| **Gemma 4 Time-to-First-Token** | ~0.70s – 0.80s | `llama.cpp` 4-bit quantized (Q4_K_M) |
-| **Gemma 4 Generation** | ~18 – 22 tok/s | ~25 tokens generated (1.1s total) |
-| **Piper TTS First Audio** | ~0.25s – 0.35s | Streaming sentence-chunk synthesis |
-| **Total Conversational Turn** | **~1.3s – 1.6s** | **Natural, human-paced responsive dialogue** |
+| **STT (Speech to Text)** | Hardware dependent | faster-whisper `tiny.en` on CPU |
+| **Gemma prompt processing** | ~2.5s – 3.0s | 43-47 tokens on the tested Pi 5 |
+| **Gemma generation** | ~3.4 – 3.7 tok/s | 7-17 tokens with the optimized server |
+| **Piper TTS** | ~1.7s first run, near-zero cached | Ryan medium ONNX voice |
+| **Typical injected-text turn** | **~6s – 11s** | Depends primarily on reply length |
 
 ---
 
@@ -351,9 +363,10 @@ sudo systemctl start portrait.service
 ### Raspberry Pi 5 Hardware Issues
 - **Hailo device not found (`hailortcli scan` empty)**: Check PCIe ribbon cable orientation, ensure `dtparam=pciex1` is in `/boot/firmware/config.txt`, and reboot.
 - **Microphone not detected**: Run `python tools/diagnose_audio.py` or `python -c "import speech_recognition as sr; print(list(enumerate(sr.Microphone.list_microphone_names())))"` and set `stt.microphone_device_index` or `stt.microphone_name` in `portrait_config.json`.
-- **Only a humming tone plays instead of speech**: Piper was not found or failed, so the app used the synthetic fallback. Verify the Piper binary exists under `/mnt/portrait/models/piper/` and watch for `[TTS] Using synthetic fallback audio` in the logs.
+- **Only a humming tone plays instead of speech**: Piper was not found or failed, so the app used the synthetic fallback. Verify the Piper binary and Ryan medium model exist under `/mnt/portrait/models/piper/` and watch for `[TTS] Using synthetic fallback audio` in the logs. Empty Gemma replies are now replaced before Piper runs.
 - **Audio playback sounds distorted on Pi speakers**: Keep `tts.playback_sample_rate` at `22050` and `tts.playback_channels` at `1`, since Piper outputs 22.05 kHz mono WAV audio.
 - **llama-server seems up but replies still fail**: First verify it is actually listening with `curl http://127.0.0.1:8080/v1/models`. If that works, increase `llm.timeout_seconds` if the Pi is still prompt-processing when the client disconnects. A cancellation in the llama-server terminal after 10-20 seconds usually means the client timed out.
+- **Gemma takes 30-90 seconds or returns empty text**: Restart it with the optimized command in Step 2. In particular, use `-np 1 -c 512 --reasoning off --reasoning-budget 0`; the app log now reports prompt tokens, output tokens, and generation rate for each reply.
 - **Pygame display errors without desktop GUI**: Use SDL DirectFB/KMSDRM mode by setting `export SDL_VIDEODRIVER=kmsdrm` before launching `main.py`.
 
 ---

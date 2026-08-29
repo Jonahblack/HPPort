@@ -35,24 +35,22 @@ All hardware-dependent and backend components are abstracted behind interfaces:
 | **Vision** | `BaseVisionDetector` | `HailoVision` (Hailo-8L NPU) | `MockVision` (Space / Timer) |
 | **STT** | `BaseSTT` | `LocalSTT` (faster-whisper) | `KeyboardSTT` (UI / CLI) |
 | **LLM** | `BaseLLMClient` | `LlamaClient` (Gemma 4 E2B) | `MockLLMClient` (Scripted) |
-| **TTS** | `BaseTTS` | `PiperTTS` (ryan-high ONNX) | `MockTTS` (Synthetic Wave) |
+| **TTS** | `BaseTTS` | `PiperTTS` (ryan-medium ONNX) | `MockTTS` (Synthetic Wave) |
 | **Renderer** | `PortraitRenderer` | Pygame (Full-screen KMS/DRM) | Pygame Windowed |
 
 ---
 
 ## 2. Low-Latency Pipeline & Instrumentation
 
-Latency target: **1.0s – 2.0s total turn-around** from user speech completion to portrait audio playback.
+Measured V1 target: **6s – 11s total turn-around** from user speech completion to portrait audio playback on a Pi 5, depending on reply length.
 
 The system instruments and logs every stage of the pipeline:
 
 ```text
-STT:                 0.62 s
-LLM first token:     0.74 s
-LLM generation:      9.2 tok/s
-First phrase ready:  1.14 s
-TTS first audio:     0.31 s
-Response started:    1.45 s
+STT:                 hardware dependent
+LLM prompt:          2.5-3.0 s
+LLM generation:      3.4-3.7 tok/s
+TTS synthesis:       ~1.7 s (near-zero when cached)
 ```
 
 ### Mouth Synchronization Formula:
@@ -77,8 +75,8 @@ $$\text{RMS} = \sqrt{\frac{1}{N}\sum_{i=1}^{N} x_i^2}$$
 │   │   └── faster_whisper_tiny_en/
 │   ├── piper/
 │   │   ├── piper (arm64 binary)
-│   │   ├── en_US-ryan-high.onnx
-│   │   └── en_US-ryan-high.onnx.json
+│   │   ├── en_US-ryan-medium.onnx
+│   │   └── en_US-ryan-medium.onnx.json
 │   └── hailo/
 │       └── yolov8s_person.hef
 ├── cache/

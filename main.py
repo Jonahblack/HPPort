@@ -133,6 +133,13 @@ class TalkingPortraitApp:
                 user_message=user_text,
                 conversation_history=self.conversation_history,
             )
+            reply = (reply or "").strip()
+            if not reply:
+                reply = self.config["llm"].get(
+                    "empty_response_text",
+                    "The castle spirits stole my answer. Ask once more, brave visitor!",
+                )
+                print("[Pipeline] Empty LLM response replaced with spoken recovery text.")
             llm_latency = time.time() - llm_start
             self.renderer.set_latency_metric("llm_ttft", f"{llm_latency:.2f}s")
             self.renderer.set_latency_metric("llm_total", f"{llm_latency:.2f}s")

@@ -5,6 +5,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+import wave
 from unittest.mock import patch
 from stt.keyboard_stt import KeyboardSTT
 from stt.local_stt import LocalSTT
@@ -13,6 +14,14 @@ from tts.piper import PiperTTS
 
 
 class TestSTTTTS(unittest.TestCase):
+
+    @staticmethod
+    def _write_test_wav(path):
+        with wave.open(path, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(b"\x00\x00" * 160)
 
     def test_keyboard_stt(self):
         stt = KeyboardSTT()
@@ -64,6 +73,56 @@ class TestSTTTTS(unittest.TestCase):
 
             tts = PiperTTS(config)
             self.assertEqual(tts.piper_binary, binary_path)
+
+    def test_piper_replaces_empty_text_before_synthesis(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            binary_path = os.path.join(tmpdir, "piper")
+            model_path = os.path.join(tmpdir, "voice.onnx")
+            open(binary_path, "w", encoding="utf-8").close()
+            open(model_path, "w", encoding="utf-8").close()
+            os.chmod(binary_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+            config = {
+                "tts": {
+                    "piper_binary_path": binary_path,
+                    "model_path": model_path,
+                    "cache_enabled": False,
+                    "empty_text_fallback": "Speak this recovery.",
+                }
+            }
+            tts = PiperTTS(config)
+            output_path = os.path.join(tmpdir, "output.wav")
+
+            def fake_run(_binary, text, wav_path, _start):
+                self.assertEqual(text, "Speak this recovery.")
+                self._write_test_wav(wav_path)
+                return wav_path, 0.01
+
+            with patch.object(tts, "_run_piper", side_effect=fake_run):
+                tts.synthesize_to_file("", output_path)
+
+    def test_piper_restores_cached_audio(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model_path = os.path.join(tmpdir, "voice.onnx")
+            open(model_path, "w", encoding="utf-8").close()
+            tts = PiperTTS(
+                {
+                    "hardware": {"cache_dir": tmpdir},
+                    "tts": {
+                        "model_path": model_path,
+                        "cache_dir": os.path.join(tmpdir, "cache"),
+                    },
+                }
+            )
+            text = "Cached greeting"
+            os.makedirs(tts.cache_dir)
+            self._write_test_wav(tts._cache_path(text))
+            output_path = os.path.join(tmpdir, "output.wav")
+
+            path, duration = tts.synthesize_to_file(text, output_path)
+
+            self.assertEqual(path, output_path)
+            self.assertGreater(duration, 0)
+            self.assertEqual(tts.last_engine, "piper_cache")
 
     @patch("stt.local_stt.subprocess.run")
     def test_arecord_device_resolution_prefers_named_usb_mic(self, mock_run):

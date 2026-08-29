@@ -37,15 +37,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
         "model_name": "gemma-4-e2b-instruction",
         "temperature": 0.35,
-        "max_tokens": 48,
+        "max_tokens": 24,
         "timeout_seconds": 90.0,
         "connect_timeout_seconds": 5.0,
         "history_turn_limit": 1,
+        "cache_prompt": True,
+        "disable_reasoning": True,
+        "empty_response_text": "The castle spirits stole my answer. Ask once more, brave visitor!",
         "system_prompt": (
-            "You are Lord Cadogan, an eccentric, chivalrous, and proud knight trapped inside an enchanted "
-            "Harry Potter-style painted portrait. Keep your answers brief, lively, and in-character "
-            "(1 to 3 short sentences suitable for spoken speech). Never use emoji or bullet points. "
-            "Greet visitors with flair and ask engaging questions."
+            "You are Lord Cadogan, a bold eccentric knight in an enchanted portrait. "
+            "Answer in one lively spoken sentence under 20 words."
         ),
         "greeting_prompt": "Ah, a visitor arrives before my frame! State your business, noble wanderer!",
     },
@@ -67,12 +68,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "tts": {
         "driver": "piper",
         "piper_binary_path": "/mnt/portrait/models/piper/piper",
-        "model_path": "/mnt/portrait/models/piper/en_US-ryan-high.onnx",
-        "model_config_path": "/mnt/portrait/models/piper/en_US-ryan-high.onnx.json",
+        "model_path": "/mnt/portrait/models/piper/en_US-ryan-medium.onnx",
+        "model_config_path": "/mnt/portrait/models/piper/en_US-ryan-medium.onnx.json",
         "speaker_id": 0,
         "length_scale": 1.0,
         "noise_scale": 0.667,
         "noise_w": 0.8,
+        "cache_enabled": True,
+        "cache_dir": "/mnt/portrait/cache/tts",
         "audio_driver": "auto",
         "playback_sample_rate": 22050,
         "playback_channels": 1,

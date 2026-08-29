@@ -65,7 +65,15 @@ Start the persistent `llama-server` background service:
   --port 8080 \
   --host 127.0.0.1 \
   -t 4 \
-  -c 2048
+  -tb 4 \
+  -c 512 \
+  -np 1 \
+  -b 256 \
+  -ub 256 \
+  --flash-attn on \
+  --reasoning off \
+  --reasoning-budget 0 \
+  --no-webui
 ```
 
 ---
@@ -104,8 +112,8 @@ Start the persistent `llama-server` background service:
    cd /mnt/portrait/models/piper
    wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz
    tar -xzf piper_arm64.tar.gz
-   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx
-   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx.json
+   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx
+   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json
    ```
 
 ---
