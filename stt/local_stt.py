@@ -1,12 +1,15 @@
 """Local STT driver using Faster-Whisper and SpeechRecognition on Raspberry Pi 5 / Desktop."""
 
+import array
 import io
+import math
 import os
 import re
 import shutil
 import subprocess
 import tempfile
 import time
+import wave
 from typing import Any, Dict, List, Optional
 
 from stt.base import BaseSTT
@@ -193,7 +196,8 @@ class LocalSTT(BaseSTT):
             self.recognizer = sr.Recognizer()
             self.recognizer.energy_threshold = self.energy_threshold
             self.recognizer.dynamic_energy_threshold = self.dynamic_energy_threshold
-            self.recognizer.pause_threshold = 0.8
+            self.recognizer.pause_threshold = 0.5
+            self.recognizer.non_speaking_duration = 0.35
 
             device_names = self._list_audio_devices()
             preferred_index = self._default_input_index_from_sounddevice()
@@ -246,10 +250,13 @@ class LocalSTT(BaseSTT):
             )
             self.model = None
 
-    def listen_and_transcribe(self, timeout_seconds: float = 3.0, max_duration_seconds: float = 10.0) -> Optional[str]:
+    def listen_and_transcribe(self, timeout_seconds: float = 2.0, max_duration_seconds: float = 6.0) -> Optional[str]:
         """Record spoken audio from microphone and transcribe to text."""
         if self._use_arecord_fallback:
-            return self._listen_with_arecord(max_duration_seconds=max_duration_seconds)
+            return self._listen_with_arecord(
+                timeout_seconds=timeout_seconds,
+                max_duration_seconds=max_duration_seconds,
+            )
 
         if not self._mic_available or not self.recognizer or not self.microphone:
             print("[STT] Microphone not available. Simulating brief listening wait (or press 'T' in window)...")
@@ -325,47 +332,129 @@ class LocalSTT(BaseSTT):
                 self._init_arecord_fallback(str(exc))
             return None
 
-    def _listen_with_arecord(self, max_duration_seconds: float = 10.0) -> Optional[str]:
+    def _listen_with_arecord(
+        self, timeout_seconds: float = 2.0, max_duration_seconds: float = 6.0
+    ) -> Optional[str]:
         if self.model is None:
             print("[STT] arecord can capture from the USB mic, but no transcription engine is installed yet.")
             time.sleep(0.5)
             return None
 
-        duration_seconds = max(1, int(round(max_duration_seconds)))
         sample_rate = int(self._selected_sample_rate or self.sample_rate or 16000)
         temp_wav = ""
+        # 50ms chunks of 16-bit mono PCM = sample_rate * 2 bytes * 0.05
+        chunk_samples = max(1, int(sample_rate * 0.05))
+        chunk_bytes = chunk_samples * 2
+        threshold = max(180.0, float(self.energy_threshold) * 0.75)
+        consecutive_silence_threshold = 7  # ~350ms of silence after speech ends turn
+
+        cmd = [
+            "arecord",
+            "-D",
+            self.arecord_device,
+            "-f",
+            "S16_LE",
+            "-r",
+            str(sample_rate),
+            "-c",
+            "1",
+            "-t",
+            "raw",
+            "-q",
+        ]
+
+        captured_chunks: List[bytes] = []
+        speech_started = False
+        consecutive_silence = 0
+        start_time = time.time()
+        max_deadline = start_time + max_duration_seconds
+        initial_timeout_deadline = start_time + timeout_seconds
+
+        print(
+            f"[STT] Streaming arecord with VAD "
+            f"(device='{self.arecord_device}', sample_rate={sample_rate}, threshold={threshold:.0f})..."
+        )
+
+        process = None
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            while True:
+                now = time.time()
+                if now > max_deadline:
+                    print(f"[STT] arecord reached maximum duration ({max_duration_seconds:.1f}s).")
+                    break
+
+                if not speech_started and now > initial_timeout_deadline:
+                    print(f"[STT] arecord initial silence timeout ({timeout_seconds:.1f}s).")
+                    break
+
+                if process.stdout is None:
+                    break
+
+                raw_data = process.stdout.read(chunk_bytes)
+                if not raw_data:
+                    break
+
+                captured_chunks.append(raw_data)
+
+                # Compute RMS energy of chunk
+                samples = array.array("h", raw_data)
+                if len(samples) > 0:
+                    sum_sq = sum(s * s for s in samples)
+                    rms = math.sqrt(sum_sq / len(samples))
+                else:
+                    rms = 0.0
+
+                if rms >= threshold:
+                    if not speech_started:
+                        speech_started = True
+                        print(f"[STT] Voice activity detected (RMS: {rms:.1f})")
+                    consecutive_silence = 0
+                else:
+                    if speech_started:
+                        consecutive_silence += 1
+                        if consecutive_silence >= consecutive_silence_threshold:
+                            print(f"[STT] End of speech detected ({consecutive_silence * 50}ms silence).")
+                            break
+
+        except Exception as exc:
+            print(f"[STT] arecord streaming capture error: {exc}")
+        finally:
+            if process:
+                try:
+                    process.terminate()
+                    process.wait(timeout=0.3)
+                except Exception:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+
+        if not speech_started or not captured_chunks:
+            print("[STT] arecord: No speech detected in capture window.")
+            return None
+
+        total_audio_sec = (len(captured_chunks) * chunk_bytes) / (sample_rate * 2.0)
+        print(f"[STT] Captured {total_audio_sec:.2f}s of speech. Transcribing...")
 
         try:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
                 temp_wav = handle.name
 
-            cmd = [
-                "arecord",
-                "-D",
-                self.arecord_device,
-                "-f",
-                "S16_LE",
-                "-r",
-                str(sample_rate),
-                "-c",
-                "1",
-                "-d",
-                str(duration_seconds),
-                temp_wav,
-            ]
-            print(
-                f"[STT] Recording with arecord "
-                f"(device='{self.arecord_device}', sample_rate={sample_rate}, duration={duration_seconds}s)..."
-            )
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_seconds + 3, check=False)
-            if result.returncode != 0:
-                stderr = result.stderr.strip() or result.stdout.strip() or f"arecord exit code {result.returncode}"
-                print(f"[STT] arecord failed: {stderr}")
-                return None
+            with wave.open(temp_wav, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(b"".join(captured_chunks))
 
             return self._transcribe_wav_file(temp_wav)
         except Exception as exc:
-            print(f"[STT] arecord capture error: {exc}")
+            print(f"[STT] arecord WAV processing error: {exc}")
             return None
         finally:
             if temp_wav and os.path.exists(temp_wav):

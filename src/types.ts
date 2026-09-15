@@ -11,11 +11,15 @@ export enum PortraitState {
 export type PersonaType = "photo_portrait" | "haunted_portrait" | "talking_fish" | "spooky_witch";
 
 export interface AssetLayerSet {
+  background?: string | null;
+  torso?: string | null;
   base: string | null;
+  eyesHalf?: string | null;
   eyesClosed: string | null;
   mouth1: string | null;
   mouth2: string | null;
   mouth3: string | null;
+  visemes?: Record<string, string | null>;
 }
 
 export interface LatencyMetrics {

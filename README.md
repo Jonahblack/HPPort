@@ -82,7 +82,7 @@ The web application runs a full-featured dashboard with animated Canvas physics,
 - **`T` key**: Injects a test question to exercise the STT $\rightarrow$ Gemma $\rightarrow$ TTS pipeline.
 - **`Esc` key**: Put the portrait to sleep (returns to `IDLE`).
 - **Layer Inspector**: Upload custom image layers or test mouth shapes in real-time with the RMS slider.
-- **Persona Preset Selector**: Switch between *Lord Cadogan (Photo Portrait)*, *Noble Alistair*, *Wilhelm the Trophy Fish*, and *Morgana the Witch*.
+- **Persona Preset Selector**: Switch between *Wilhelm (Photo Portrait)*, *Noble Alistair*, *Wilhelm the Trophy Fish*, and *Morgana the Witch*.
 
 ---
 
@@ -122,7 +122,7 @@ Run the native Pygame application in demo mode on any desktop computer without n
 
 ### Desktop Demo Hotkeys
 - **`Space`**: Simulate visitor approaching portrait (triggers vision detector).
-- **`t`**: Injects test question (`"What great beasts have you slain, Sir Cadogan?"`).
+- **`t`**: Injects test question (`"What great beasts have you slain, Wilhelm?"`).
 - **`q`** or **`Esc`**: Clean exit.
 
 ### Connecting Local Gemma 4 via `llama.cpp` on Desktop (Optional)

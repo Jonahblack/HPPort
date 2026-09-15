@@ -16,7 +16,7 @@ class KeyboardSTT(BaseSTT):
             "Who goes there?",
             "Can you tell me where the Gryffindor common room is?",
             "What monsters have you fought lately?",
-            "Farewell for now, Lord Cadogan.",
+            "Farewell for now, Wilhelm.",
         ]
         self._sample_index = 0
 

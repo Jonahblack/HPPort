@@ -1,5 +1,6 @@
 """Llama.cpp client driver connecting to OpenAI-compatible REST server (Gemma 4)."""
 
+import json
 import time
 import requests
 from typing import List, Dict, Any, Optional
@@ -29,7 +30,7 @@ class LlamaClient(BaseLLMClient):
         self._resolved_model_name: Optional[str] = None
         self.system_prompt = llm_cfg.get(
             "system_prompt",
-            "You are Lord Cadogan, an eccentric knight in a magical portrait. Speak boldly in 1-3 short sentences.",
+            "You are Wilhelm, an eccentric knight in a magical portrait. Speak boldly in 1-3 short sentences.",
         )
 
     @staticmethod
@@ -192,3 +193,84 @@ class LlamaClient(BaseLLMClient):
         except requests.exceptions.RequestException as e:
             print(f"[LLM] Connection error to {self.endpoint_url}: {e}")
             return "Hark! The castle magical currents are severed. Check that llama-server is awake!"
+
+    def generate_response_stream(
+        self,
+        user_message: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+    ):
+        """Yield text tokens in real time from llama-server SSE stream."""
+        sys_prompt = system_prompt or self.system_prompt
+        messages = [{"role": "system", "content": sys_prompt}]
+
+        if conversation_history:
+            max_history_messages = max(0, self.history_turn_limit * 2)
+            for item in conversation_history[-max_history_messages:]:
+                role = item.get("role", "user")
+                if role in ("user", "assistant"):
+                    messages.append({"role": role, "content": item.get("content", "")})
+
+        messages.append({"role": "user", "content": user_message})
+
+        payload = {
+            "model": self._resolve_model_name(),
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "n_predict": self.max_tokens,
+            "stream": True,
+            "cache_prompt": self.cache_prompt,
+        }
+        if self.disable_reasoning:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+
+        start_time = time.time()
+        first_token_time = None
+        accumulated_text = []
+
+        try:
+            resp = requests.post(
+                self.endpoint_url,
+                json=payload,
+                stream=True,
+                timeout=(self.connect_timeout, self.timeout),
+            )
+            if resp.status_code != 200:
+                print(f"[LLM] Server returned HTTP {resp.status_code}: {resp.text}")
+                yield "By my troth, a mystical perturbation clouds my mind!"
+                return
+
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                line_str = line.decode("utf-8") if isinstance(line, bytes) else str(line)
+                if not line_str.startswith("data: "):
+                    continue
+                data_body = line_str[6:].strip()
+                if data_body == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_body)
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        token = delta.get("content", "")
+                        if token:
+                            if first_token_time is None:
+                                first_token_time = time.time() - start_time
+                                print(f"[LLM] First token received in {first_token_time:.2f}s (TTFT)")
+                            accumulated_text.append(token)
+                            yield token
+                except Exception:
+                    continue
+
+            total_duration = time.time() - start_time
+            full_reply = "".join(accumulated_text).strip()
+            rate = len(accumulated_text) / max(0.001, total_duration)
+            print(f"[LLM] Gemma streaming finished in {total_duration:.2f}s ({rate:.2f} tok/s): \"{full_reply}\"")
+            if not full_reply:
+                yield self.empty_response_text
+        except requests.exceptions.RequestException as e:
+            print(f"[LLM] Streaming connection error: {e}")
+            yield "Hark! The castle magical currents are severed."

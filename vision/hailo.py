@@ -47,6 +47,9 @@ class HailoVision(BaseVisionDetector):
         self._last_fps_calc = time.time()
         self._bounding_box: Optional[Tuple[int, int, int, int]] = None
         self._prev_gray: Optional[np.ndarray] = None
+        self._smoothed_gaze_x = 0.0
+        self._smoothed_gaze_y = 0.0
+        self._smoothed_distance = 1.0
 
     def start(self) -> None:
         """Initialize Hailo runtime diagnostics and camera capture thread."""
@@ -107,6 +110,26 @@ class HailoVision(BaseVisionDetector):
                 confidence = max(confidence, 0.94)
                 if bbox is None:
                     bbox = self._default_manual_bbox()
+
+            if detected and bbox is not None:
+                bx, by, bw, bh = bbox
+                cx = bx + bw / 2.0
+                cy = by + bh / 2.0
+                raw_x = (cx - (self.cam_width / 2.0)) / (self.cam_width / 2.0)
+                raw_y = (cy - (self.cam_height / 2.0)) / (self.cam_height / 2.0)
+                raw_dist = max(0.5, min(2.0, (self.cam_height * 0.45) / max(1.0, float(bh))))
+                target_x = max(-1.0, min(1.0, float(raw_x)))
+                target_y = max(-1.0, min(1.0, float(raw_y)))
+                target_dist = float(raw_dist)
+            else:
+                target_x = 0.0
+                target_y = 0.0
+                target_dist = 1.0
+
+            alpha = 0.18
+            self._smoothed_gaze_x = (1.0 - alpha) * self._smoothed_gaze_x + alpha * target_x
+            self._smoothed_gaze_y = (1.0 - alpha) * self._smoothed_gaze_y + alpha * target_y
+            self._smoothed_distance = (1.0 - alpha) * self._smoothed_distance + alpha * target_dist
 
             with self._frame_lock:
                 self._latest_frame = frame_rgb
@@ -397,6 +420,14 @@ class HailoVision(BaseVisionDetector):
                 "model_path": self.model_path,
                 "camera_backend": self.camera_backend,
             }
+
+    def get_visitor_gaze(self) -> Tuple[float, float, float]:
+        with self._frame_lock:
+            return (
+                round(float(self._smoothed_gaze_x), 3),
+                round(float(self._smoothed_gaze_y), 3),
+                round(float(self._smoothed_distance), 3),
+            )
 
     def stop(self) -> None:
         self._running = False

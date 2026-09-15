@@ -65,15 +65,15 @@ const INITIAL_CONFIG: AppConfig = {
     stop_phrase: "goodbye portrait",
     gemini_model: "gemma-4-e2b-instruction",
     system_prompt:
-      "You are Lord Cadogan, the eccentric, valiant knight sealed inside a magical Hogwarts portrait. You believe every conversation is a grand quest. Answer in 1 to 3 vivid sentences. Be bold, boast of slaying beasts, and challenge the user to noble deeds!",
+      "You are Wilhelm, the eccentric, valiant knight sealed inside a magical Hogwarts portrait. You believe every conversation is a grand quest. Answer in 1 to 3 vivid sentences. Be bold, boast of slaying beasts, and challenge the user to noble deeds!",
     listen_timeout_seconds: 5.0,
     phrase_time_limit_seconds: 10.0,
     wake_listen_timeout_seconds: 2.0,
     wake_phrase_limit_seconds: 3.0,
     max_history_messages: 10,
     max_silence_turns: 2,
-    greeting_on_camera: "Stand and deliver! Who approaches the glorious portrait of Sir Cadogan?",
-    greeting_on_voice: "Hark! Someone addresses the great Sir Cadogan! What quest brings you to my hall?",
+    greeting_on_camera: "Stand and deliver! Who approaches the glorious portrait of Wilhelm?",
+    greeting_on_voice: "Hark! Someone addresses the great Wilhelm! What quest brings you to my hall?",
     silence_prompt: "The silence lingers like castle cobwebs... speak up if you dare!",
     farewell: "Farewell, traveler! May your sword stay sharp and your courage true!",
   },
@@ -193,7 +193,7 @@ export const App: React.FC = () => {
     const sttStartTime = performance.now();
     appendMessage("user", userText);
     setState(PortraitState.THINKING);
-    setStatusText("Lord Cadogan is consulting Gemma 4...");
+    setStatusText("Wilhelm is consulting Gemma 4...");
 
     const sttDuration = Math.max(0.4, (performance.now() - sttStartTime) / 1000);
     const thinkingStart = performance.now();
@@ -296,7 +296,7 @@ export const App: React.FC = () => {
         }
       } else if (e.code === "KeyT") {
         if (stateRef.current === PortraitState.LISTENING) {
-          handleUserInput("What great beasts have you slain, Sir Cadogan?");
+          handleUserInput("What great beasts have you slain, Wilhelm?");
         }
       } else if (e.code === "Escape") {
         setState(PortraitState.IDLE);
@@ -515,7 +515,7 @@ export const App: React.FC = () => {
                   ? "Wilhelm the Talking Fish"
                   : personaType === "spooky_witch"
                   ? "Morgana the Witch"
-                  : "Lord Cadogan (Knight of Hogwarts)"}
+                  : "Wilhelm (Knight of Hogwarts)"}
               </span>
             </div>
             <div className="flex items-center gap-3 text-[11px]">

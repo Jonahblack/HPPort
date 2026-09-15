@@ -16,7 +16,7 @@ class TestLLM(unittest.TestCase):
         response = self.mock_llm.generate_response("Hello, what is your name?")
         self.assertIsInstance(response, str)
         self.assertGreater(len(response), 10)
-        self.assertIn("Cadogan", response)
+        self.assertIn("Wilhelm", response)
 
     def test_mock_llm_password(self):
         response = self.mock_llm.generate_response("What is the password to the common room?")
@@ -92,6 +92,16 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(payload["max_tokens"], 24)
         self.assertEqual(payload["n_predict"], 24)
         self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
+
+    def test_generate_clauses_splits_on_boundaries(self):
+        client = MockLLMClient()
+        # Mock generate_response_stream to yield individual tokens
+        tokens = ["Hark, ", "noble ", "traveler! ", "A ", "grand ", "quest ", "awaits ", "thee."]
+        client.generate_response_stream = Mock(return_value=iter(tokens))
+
+        clauses = list(client.generate_clauses("Hello"))
+        self.assertGreaterEqual(len(clauses), 2)
+        self.assertIn("Hark, noble traveler!", clauses[0])
 
 
 if __name__ == "__main__":

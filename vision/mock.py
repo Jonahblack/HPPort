@@ -1,9 +1,13 @@
-"""Mock vision detector for desktop development and automated testing."""
-
+import math
 import time
-import numpy as np
 from typing import Dict, Any, Optional, Tuple
 from vision.base import BaseVisionDetector
+
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
 
 
 class MockVision(BaseVisionDetector):
@@ -49,6 +53,9 @@ class MockVision(BaseVisionDetector):
 
     def get_latest_frame(self, target_size: Optional[Tuple[int, int]] = None) -> Optional[Any]:
         """Generate animated synthetic radar surface for Pygame preview."""
+        if not HAS_NUMPY:
+            return None
+
         self.sim_tick += 1
         w, h = self.cam_width, self.cam_height
 
@@ -92,3 +99,11 @@ class MockVision(BaseVisionDetector):
             "detected": self.is_person_detected(),
             "confidence": round(self.get_confidence(), 2),
         }
+
+    def get_visitor_gaze(self) -> Tuple[float, float, float]:
+        if not self.is_person_detected():
+            return (0.0, 0.0, 1.0)
+        norm_x = float(math.sin(self.sim_tick * 0.05))
+        norm_y = float(0.15 * math.cos(self.sim_tick * 0.03))
+        distance = 1.0 + 0.2 * float(math.sin(self.sim_tick * 0.02))
+        return (norm_x, norm_y, distance)

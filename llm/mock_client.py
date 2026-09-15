@@ -6,7 +6,7 @@ from llm.base import BaseLLMClient
 
 
 class MockLLMClient(BaseLLMClient):
-    """Provides scripted, in-character Lord Cadogan responses for desktop testing."""
+    """Provides scripted, in-character Wilhelm responses for desktop testing."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.canned_responses = [
@@ -14,7 +14,7 @@ class MockLLMClient(BaseLLMClient):
             "By Merlin's beard! I once wrestled a three-headed Wyvern atop the Astronomy Tower with nought but a butter knife!",
             "Speak plainly, knave! A true knight of the Round Table waits for no rambling mortal!",
             "Ah, a bold adventurer! Dost thou pledge thine honor to defend Hogwarts against the dark arts?",
-            "Forward, to glory! No obstacle shall deter Sir Cadogan and his trusty steed!",
+            "Forward, to glory! No obstacle shall deter Wilhelm and his trusty steed!",
         ]
 
     def generate_response(
@@ -26,7 +26,7 @@ class MockLLMClient(BaseLLMClient):
         # Check for keywords
         lower = user_message.lower()
         if "who are you" in lower or "name" in lower:
-            return "I am Sir Cadogan, knight of the realm, slayer of monsters, and proud defender of this hallowed frame!"
+            return "I am Wilhelm, knight of the realm, slayer of monsters, and proud defender of this hallowed frame!"
         if "password" in lower or "secret" in lower:
             return "The password is 'Caput Draconis'! Or was it 'Oddsbodikins'? No matter, only the valiant shall pass!"
         if "dragon" in lower or "quest" in lower:

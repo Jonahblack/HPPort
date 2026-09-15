@@ -60,7 +60,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 <span className="text-base">🧔👓</span>
                 <span className="text-[9px] bg-amber-900 text-amber-200 px-1 rounded font-mono">Real Photo</span>
               </div>
-              <span className="text-xs font-bold font-cinzel text-stone-200">Lord Cadogan (Photo)</span>
+              <span className="text-xs font-bold font-cinzel text-stone-200">Wilhelm (Photo)</span>
               <span className="text-[10px] text-stone-400">Glasses, Beard, 3-Mouth Layers</span>
             </button>
 

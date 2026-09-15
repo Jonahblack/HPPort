@@ -14,11 +14,22 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "audio_dir": "/mnt/portrait/audio",
         "logs_dir": "/mnt/portrait/logs",
     },
+    "conversation_mode": "auto",  # 'auto' (use Gemini Live if online & quota valid, else local), 'local', 'gemini_live'
+    "gemini_live": {
+        "enabled": True,
+        "model": "gemini-3.1-flash-live-preview",
+        "voice_name": "Puck",
+        "api_key_env": "GEMINI_API_KEY",
+        "max_daily_tokens": 250000,
+        "max_session_tokens": 40000,
+        "storage_file": "token_usage.json",
+        "quota_fallback_text": "My celestial communications are depleted for today! I shall converse with thee through local enchantments instead.",
+    },
     "state_machine": {
         "wake_confirm_frames": 3,
         "wake_confirm_timeout_seconds": 1.5,
-        "silence_timeout_seconds": 4.0,
-        "max_listen_duration_seconds": 10.0,
+        "silence_timeout_seconds": 1.2,
+        "max_listen_duration_seconds": 5.0,
         "max_consecutive_silence": 2,
         "cooldown_duration_seconds": 8.0,
     },
@@ -45,7 +56,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "disable_reasoning": True,
         "empty_response_text": "The castle spirits stole my answer. Ask once more, brave visitor!",
         "system_prompt": (
-            "You are Lord Cadogan, a bold eccentric forest guardian and noble warrior in an enchanted portrait. "
+            "You are Wilhelm, a bold eccentric forest guardian and noble warrior in an enchanted portrait. "
             "Answer in one lively spoken sentence under 20 words."
         ),
         "greeting_prompt": "Ah, a visitor arrives before my frame! State your business, noble wanderer!",

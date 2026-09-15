@@ -7,11 +7,22 @@
     "audio_dir": "/mnt/portrait/audio",
     "logs_dir": "/mnt/portrait/logs"
   },
+  "conversation_mode": "auto",
+  "gemini_live": {
+    "enabled": true,
+    "model": "gemini-3.1-flash-live-preview",
+    "voice_name": "Puck",
+    "api_key_env": "GEMINI_API_KEY",
+    "max_daily_tokens": 250000,
+    "max_session_tokens": 40000,
+    "storage_file": "token_usage.json",
+    "quota_fallback_text": "My celestial communications are depleted for today! I shall converse with thee through local enchantments instead."
+  },
   "state_machine": {
     "wake_confirm_frames": 3,
     "wake_confirm_timeout_seconds": 1.5,
-    "silence_timeout_seconds": 4.0,
-    "max_listen_duration_seconds": 10.0,
+    "silence_timeout_seconds": 1.2,
+    "max_listen_duration_seconds": 5.0,
     "max_consecutive_silence": 2,
     "cooldown_duration_seconds": 8.0
   },
@@ -37,7 +48,7 @@
     "cache_prompt": true,
     "disable_reasoning": true,
     "empty_response_text": "The castle spirits stole my answer. Ask once more, brave visitor!",
-    "system_prompt": "You are Lord Cadogan, a bold eccentric forest guardian and noble warrior in an enchanted portrait. Answer in one lively spoken sentence under 20 words.",
+    "system_prompt": "You are Wilhelm, a bold eccentric forest guardian and noble warrior in an enchanted portrait. Answer in one lively spoken sentence under 20 words.",
     "greeting_prompt": "Ah, a visitor arrives before my frame! State your business, noble wanderer!"
   },
   "stt": {
@@ -90,9 +101,16 @@
     },
     "camera_motion": true,
     "ambient_motes": true,
-    "blink_min_seconds": 2.0,
-    "blink_max_seconds": 5.0,
-    "blink_duration_ms": 150,
+    "gaze_tracking_enabled": true,
+    "gaze_sensitivity_x": 1.0,
+    "gaze_sensitivity_y": 0.8,
+    "viseme_crossfade": true,
+    "viseme_crossfade_duration_ms": 35,
+    "micro_saccades": true,
+    "blink_easing": true,
+    "blink_min_seconds": 2.2,
+    "blink_max_seconds": 5.5,
+    "blink_duration_ms": 180,
     "amplitude_threshold_mouth_2": 0.15,
     "amplitude_threshold_mouth_3": 0.45
   },

@@ -620,7 +620,7 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
         ctx.fillStyle = "#7f1d1d";
         ctx.fill();
       } else {
-        // --- HAUNTED KNIGHT (Lord Cadogan) / WITCH ---
+        // --- HAUNTED KNIGHT (Wilhelm) / WITCH ---
         ctx.beginPath();
         ctx.moveTo(centerX - 150, centerY + 140);
         ctx.quadraticCurveTo(centerX - 130, centerY + 60, centerX - 60, centerY + 65);

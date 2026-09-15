@@ -30,6 +30,12 @@ class TestHailoVision(unittest.TestCase):
         frame = self.vision._build_standby_frame()
         self.assertEqual(frame.shape, (self.vision.cam_height, self.vision.cam_width, 3))
 
+    def test_visitor_gaze_returns_valid_tuple(self):
+        gaze = self.vision.get_visitor_gaze()
+        self.assertIsInstance(gaze, tuple)
+        self.assertEqual(len(gaze), 3)
+        self.assertEqual(gaze, (0.0, 0.0, 1.0))
+
 
 if __name__ == "__main__":
     unittest.main()

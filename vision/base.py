@@ -40,3 +40,7 @@ class BaseVisionDetector(ABC):
             "detected": False,
             "confidence": 0.0,
         }
+
+    def get_visitor_gaze(self) -> Tuple[float, float, float]:
+        """Get normalized gaze target (x, y, distance) where x, y are in [-1.0, 1.0] and distance >= 0.0."""
+        return (0.0, 0.0, 1.0)
