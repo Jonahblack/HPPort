@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   PortraitState,
   RenderConfig,
@@ -9,6 +9,9 @@ import {
   CameraDeviceInfo,
 } from "../types";
 import { CameraCornerFeed } from "./CameraCornerFeed";
+
+type ImageLayerName = "base" | "eyesClosed" | "mouth1" | "mouth2" | "mouth3";
+const IMAGE_LAYERS: ImageLayerName[] = ["base", "eyesClosed", "mouth1", "mouth2", "mouth3"];
 
 interface PortraitCanvasProps {
   state: PortraitState;
@@ -72,33 +75,54 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const cursorPosRef = useRef<{ x: number; y: number } | null>(null);
+  // Audio meter and pointer updates must not tear down the animation loop.
+  const renderPropsRef = useRef({
+    state, mouthLevel, statusText, cameraMode, cameraAvailable, config,
+    personaType, isForceBlinking, showGuides,
+  });
+  renderPropsRef.current = {
+    state, mouthLevel, statusText, cameraMode, cameraAvailable, config,
+    personaType, isForceBlinking, showGuides,
+  };
 
   // Cached image elements for uploaded custom layers
-  const loadedImagesRef = useRef<Record<string, HTMLImageElement>>({});
+  const loadedImagesRef = useRef<Partial<Record<ImageLayerName, HTMLImageElement>>>({});
+  const loadedSourcesRef = useRef<Partial<Record<ImageLayerName, string>>>({});
 
   // Preload custom images when customLayers changes
   useEffect(() => {
-    if (!customLayers) return;
-    const layers: (keyof AssetLayerSet)[] = ["base", "eyesClosed", "mouth1", "mouth2", "mouth3"];
-    layers.forEach((layer) => {
-      const src = customLayers[layer];
+    let cancelled = false;
+    const pending: HTMLImageElement[] = [];
+    IMAGE_LAYERS.forEach((layer) => {
+      const src = customLayers?.[layer];
       if (src) {
+        if (loadedSourcesRef.current[layer] === src && loadedImagesRef.current[layer]) return;
+        delete loadedImagesRef.current[layer];
+        delete loadedSourcesRef.current[layer];
         const img = new Image();
-        img.src = src;
+        img.decoding = "async";
         img.onload = () => {
+          if (cancelled) return;
           loadedImagesRef.current[layer] = img;
+          loadedSourcesRef.current[layer] = src;
         };
+        img.src = src;
+        pending.push(img);
       } else {
         delete loadedImagesRef.current[layer];
+        delete loadedSourcesRef.current[layer];
       }
     });
+    return () => {
+      cancelled = true;
+      pending.forEach((img) => { img.onload = null; });
+    };
   }, [customLayers]);
 
   // Eye and animation state refs
   const animStateRef = useRef({
     eyeOffset: 0,
-    eyeVelocity: 0,
     nextBlinkAt: performance.now() + 2500,
     blinkUntil: 0,
     ambientPulse: 0,
@@ -114,9 +138,26 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
     if (!ctx) return;
 
     let animationFrameId: number;
+    let lastPaintAt = 0;
+    let previousPaintAt = 0;
+    let wallGradient: CanvasGradient | null = null;
+    let gradientSize = "";
+    let subtitleKey = "";
+    let subtitleLines: string[] = [];
 
-    const render = () => {
-      const now = performance.now();
+    const render = (now: number) => {
+      animationFrameId = requestAnimationFrame(render);
+      const {
+        state, mouthLevel, statusText, cameraMode, cameraAvailable, config,
+        personaType, isForceBlinking, showGuides,
+      } = renderPropsRef.current;
+      const fps = Math.min(30, Math.max(1, Number.isFinite(config.fps) ? config.fps : 30));
+      const interval = 1000 / fps;
+      const elapsed = now - lastPaintAt;
+      if (document.hidden || elapsed < interval) return;
+      lastPaintAt = now - (elapsed % interval);
+      const delta = Math.min(0.1, (now - previousPaintAt) / 1000);
+      previousPaintAt = now;
       const anim = animStateRef.current;
 
       // Handle Blinking loop (2-5 sec interval, 150ms duration)
@@ -131,17 +172,13 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
       let targetX = baseEye;
       let targetY = Math.cos(now * 0.0008) * 2.0;
 
-      if (cursorPos && canvas) {
-        const rect = canvas.getBoundingClientRect();
-        const normX = (cursorPos.x - rect.left) / rect.width - 0.5;
-        const normY = (cursorPos.y - rect.top) / rect.height - 0.5;
-        targetX += normX * 8.0;
-        targetY += normY * 5.0;
+      const cursorPos = cursorPosRef.current;
+      if (cursorPos) {
+        targetX += cursorPos.x * 8.0;
+        targetY += cursorPos.y * 5.0;
       }
 
-      anim.eyeVelocity += (targetX - anim.eyeOffset) * 0.08;
-      anim.eyeVelocity *= 0.85;
-      anim.eyeOffset += anim.eyeVelocity;
+      anim.eyeOffset += (targetX - anim.eyeOffset) * (1 - Math.exp(-8 * delta));
 
       // Breathing subtle idle motion
       anim.breathOffset = Math.sin(now * 0.0018) * 2.5;
@@ -150,24 +187,18 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
       const width = canvas.width;
       const height = canvas.height;
 
-      ctx.clearRect(0, 0, width, height);
-
       // 1. Background (Dark Manor Wall)
       ctx.fillStyle = `rgb(${config.background_color.join(",")})`;
       ctx.fillRect(0, 0, width, height);
 
       // Radial vignette
-      const wallGrad = ctx.createRadialGradient(
-        width / 2,
-        height / 2,
-        100,
-        width / 2,
-        height / 2,
-        width * 0.7
-      );
-      wallGrad.addColorStop(0, "rgba(42, 35, 30, 0.4)");
-      wallGrad.addColorStop(1, "rgba(8, 7, 10, 0.95)");
-      ctx.fillStyle = wallGrad;
+      if (!wallGradient || gradientSize !== `${width}:${height}`) {
+        wallGradient = ctx.createRadialGradient(width / 2, height / 2, 100, width / 2, height / 2, width * 0.7);
+        wallGradient.addColorStop(0, "rgba(42, 35, 30, 0.4)");
+        wallGradient.addColorStop(1, "rgba(8, 7, 10, 0.95)");
+        gradientSize = `${width}:${height}`;
+      }
+      ctx.fillStyle = wallGradient;
       ctx.fillRect(0, 0, width, height);
 
       // 2. Picture Frame / Outer Canvas Bevel
@@ -740,43 +771,75 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
 
       // Subtitle / Spoken speech bubble
       if (statusText) {
-        ctx.font = "italic 13px 'MedievalSharp', cursive, serif";
-        ctx.fillStyle = "#fef08a";
-        const maxLen = 65;
-        const displaySub = statusText.length > maxLen ? statusText.substring(0, maxLen) + "..." : statusText;
-        const subW = ctx.measureText(`"${displaySub}"`).width;
-        ctx.fillText(`"${displaySub}"`, Math.max(plateX + 120, centerX - subW / 2), plateY - 14);
+        ctx.font = "italic 18px Georgia, serif";
+        const maxWidth = Math.max(40, plateW - 32);
+        const key = `${maxWidth}:${statusText}`;
+        if (subtitleKey !== key) {
+          subtitleKey = key;
+          subtitleLines = [];
+          let line = "";
+          for (const word of statusText.split(/\s+/)) {
+            const candidate = line ? `${line} ${word}` : word;
+            if (ctx.measureText(candidate).width <= maxWidth) {
+              line = candidate;
+              continue;
+            }
+            if (line) subtitleLines.push(line);
+            line = "";
+            for (const char of word) {
+              if (line && ctx.measureText(line + char).width > maxWidth) {
+                subtitleLines.push(line);
+                line = char;
+              } else {
+                line += char;
+              }
+            }
+          }
+          if (line) subtitleLines.push(line);
+          if (subtitleLines.length > 3) {
+            subtitleLines = subtitleLines.slice(0, 3);
+            while (subtitleLines[2] && ctx.measureText(`${subtitleLines[2]}...`).width > maxWidth) {
+              subtitleLines[2] = subtitleLines[2].slice(0, -1);
+            }
+            subtitleLines[2] += "...";
+          }
+        }
+        const top = plateY - 16 - subtitleLines.length * 24;
+        ctx.beginPath();
+        ctx.roundRect(plateX, top - 8, plateW, subtitleLines.length * 24 + 12, 6);
+        ctx.fillStyle = "rgba(10, 8, 6, 0.86)";
+        ctx.fill();
+        ctx.fillStyle = "#fef0b4";
+        ctx.textAlign = "center";
+        subtitleLines.forEach((line, index) => ctx.fillText(line, centerX, top + 16 + index * 24));
+        ctx.textAlign = "start";
       }
-
-      animationFrameId = requestAnimationFrame(render);
     };
 
-    render();
+    animationFrameId = requestAnimationFrame(render);
 
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [
-    state,
-    mouthLevel,
-    statusText,
-    cameraMode,
-    cameraAvailable,
-    config,
-    personaType,
-    cursorPos,
-    isForceBlinking,
-    showGuides,
-  ]);
+  }, []);
 
   return (
     <div
       ref={containerRef}
       id="portrait-canvas-container"
       onClick={onCanvasClick}
-      onMouseMove={(e) => setCursorPos({ x: e.clientX, y: e.clientY })}
-      onMouseLeave={() => setCursorPos(null)}
-      className="relative w-full aspect-[5/3] max-w-4xl mx-auto rounded-2xl overflow-hidden shadow-2xl border-4 border-amber-900/60 cursor-pointer group select-none transition-all duration-300 hover:border-amber-700/80"
+      onMouseMove={(e) => {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (rect && rect.width > 0 && rect.height > 0) {
+          cursorPosRef.current = {
+            x: (e.clientX - rect.left) / rect.width - 0.5,
+            y: (e.clientY - rect.top) / rect.height - 0.5,
+          };
+        }
+      }}
+      onMouseLeave={() => { cursorPosRef.current = null; }}
+      style={{ aspectRatio: `${config.width || 800} / ${config.height || 480}` }}
+      className="relative w-full max-w-4xl mx-auto rounded-2xl overflow-hidden shadow-2xl border-4 border-amber-900/60 cursor-pointer group select-none transition-all duration-300 hover:border-amber-700/80"
     >
       <canvas
         ref={canvasRef}

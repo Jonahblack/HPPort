@@ -2,13 +2,13 @@ import express, { Request, Response } from "express";
 import path from "path";
 import cors from "cors";
 import dotenv from "dotenv";
-import { createServer as createViteServer } from "vite";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const isProduction = process.env.NODE_ENV === "production" || process.argv[1]?.endsWith("server.cjs");
 
 app.use(cors());
 app.use(express.json());
@@ -45,7 +45,7 @@ let currentConfig = {
     language: "en-US",
     wake_word: "portrait",
     stop_phrase: "goodbye portrait",
-    gemini_model: "gemini-2.5-flash",
+    gemini_model: "gemini-3.5-flash-lite",
     system_prompt:
       "You are a haunted talking portrait mounted on a wall in an ancient Victorian manor. You are warm, playful, witty, and slightly eerie/uncanny. Keep replies concise (1 to 3 short spoken sentences) and engaging.",
     listen_timeout_seconds: 7.0,
@@ -95,7 +95,7 @@ function getGenAI(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
   if (!genAIInstance) {
-    genAIInstance = new GoogleGenAI({ apiKey });
+    genAIInstance = new GoogleGenAI({ apiKey, httpOptions: { timeout: 12000, retryOptions: { attempts: 1 } } });
   }
   return genAIInstance;
 }
@@ -149,7 +149,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   const apiKey = process.env.GEMINI_API_KEY;
   const ai = getGenAI();
 
-  const chosenModel = model || currentConfig.conversation.gemini_model || "gemini-2.5-flash";
+  const chosenModel = model || currentConfig.conversation.gemini_model || "gemini-3.5-flash-lite";
   const chosenPrompt =
     systemPrompt || currentConfig.conversation.system_prompt || "You are a haunted talking portrait.";
 
@@ -184,6 +184,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
           systemInstruction: chosenPrompt,
           temperature: 0.85,
           maxOutputTokens: 250,
+          ...(chosenModel === "gemini-3.5-flash-lite" ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } } : {}),
         },
       });
 
@@ -220,7 +221,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   };
 
   const lower = message.toLowerCase();
-  let selected = "The portrait's eyes follow you intently. (Set GEMINI_API_KEY in environment for full generative AI dialogues!)";
+  let selected = "Greetings, traveler. What tale have you brought to my gallery?";
 
   for (const [k, v] of Object.entries(simulatedReplies)) {
     if (lower.includes(k)) {
@@ -237,7 +238,8 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 });
 
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

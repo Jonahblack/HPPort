@@ -11,18 +11,24 @@
   "gemini_live": {
     "enabled": true,
     "model": "gemini-3.1-flash-live-preview",
-    "voice_name": "Puck",
+    "voice_name": "Charon",
     "api_key_env": "GEMINI_API_KEY",
     "max_daily_tokens": 250000,
     "max_session_tokens": 40000,
     "storage_file": "token_usage.json",
-    "quota_fallback_text": "My celestial communications are depleted for today! I shall converse with thee through local enchantments instead."
+    "quota_fallback_text": "My celestial communications are depleted for today! I shall converse with thee through local enchantments instead.",
+    "response_voice": "piper",
+    "text_model": "gemini-3.5-flash-lite",
+    "max_output_tokens": 128,
+    "timeout_seconds": 12.0,
+    "turn_timeout_seconds": 30.0,
+    "retry_cooldown_seconds": 30.0
   },
   "state_machine": {
     "wake_confirm_frames": 3,
     "wake_confirm_timeout_seconds": 1.5,
-    "silence_timeout_seconds": 1.2,
-    "max_listen_duration_seconds": 5.0,
+    "silence_timeout_seconds": 4.0,
+    "max_listen_duration_seconds": 10.0,
     "max_consecutive_silence": 2,
     "cooldown_duration_seconds": 8.0
   },
@@ -34,17 +40,18 @@
     "camera_device_index": 0,
     "camera_width": 640,
     "camera_height": 480,
-    "camera_fps": 30
+    "camera_fps": 15,
+    "analysis_width": 320
   },
   "llm": {
     "driver": "llama_client",
     "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
     "model_name": "gemma-4-e2b-instruction",
     "temperature": 0.35,
-    "max_tokens": 24,
+    "max_tokens": 48,
     "timeout_seconds": 90.0,
     "connect_timeout_seconds": 5.0,
-    "history_turn_limit": 1,
+    "history_turn_limit": 2,
     "cache_prompt": true,
     "disable_reasoning": true,
     "empty_response_text": "The castle spirits stole my answer. Ask once more, brave visitor!",
@@ -62,11 +69,16 @@
     "energy_threshold": 300,
     "dynamic_energy_threshold": true,
     "ambient_calibration_seconds": 0.3,
-    "microphone_device_index": 1,
-    "microphone_name": "USB PnP Sound Device",
-    "sample_rate": 44100,
+    "microphone_device_index": null,
+    "microphone_name": "",
+    "sample_rate": null,
     "chunk_size": 1024,
-    "arecord_device": "plughw:2,0"
+    "arecord_device": "",
+    "pause_threshold": 0.5,
+    "non_speaking_duration": 0.2,
+    "phrase_threshold": 0.15,
+    "cpu_threads": 2,
+    "allow_online_fallback": false
   },
   "tts": {
     "driver": "piper",
@@ -82,14 +94,18 @@
     "audio_driver": "auto",
     "playback_sample_rate": 22050,
     "playback_channels": 1,
-    "playback_buffer_size": 512
+    "playback_buffer_size": 512,
+    "runtime": "auto",
+    "warmup_enabled": true,
+    "synthesis_timeout_seconds": 30.0,
+    "cache_max_entries": 128
   },
   "renderer": {
     "window_title": "Harry Potter Talking Portrait (Gemma 4)",
     "width": 1024,
     "height": 768,
     "fullscreen": false,
-    "fps": 60,
+    "fps": 30,
     "assets_dir": "assets",
     "asset_mode": "full_frames",
     "sprite_files": {
@@ -112,7 +128,9 @@
     "blink_max_seconds": 5.5,
     "blink_duration_ms": 180,
     "amplitude_threshold_mouth_2": 0.15,
-    "amplitude_threshold_mouth_3": 0.45
+    "amplitude_threshold_mouth_3": 0.45,
+    "show_debug_hud": false,
+    "show_camera_pip": false
   },
   "logging": {
     "log_level": "INFO",

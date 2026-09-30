@@ -1,6 +1,7 @@
 """Unit tests for Portrait State Machine."""
 
 import unittest
+from copy import deepcopy
 from config import DEFAULT_CONFIG
 from state_machine import PortraitStateMachine, PortraitState
 
@@ -8,7 +9,7 @@ from state_machine import PortraitStateMachine, PortraitState
 class TestPortraitStateMachine(unittest.TestCase):
 
     def setUp(self):
-        self.config = dict(DEFAULT_CONFIG)
+        self.config = deepcopy(DEFAULT_CONFIG)
         self.config["state_machine"]["wake_confirm_frames"] = 2
         self.config["state_machine"]["cooldown_duration_seconds"] = 0.5
         self.fsm = PortraitStateMachine(self.config)

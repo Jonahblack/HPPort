@@ -1,2 +1,14 @@
 # Local environment variables and credentials
 .env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+dist/
+.cache/
+cache/
+*.log
+token_usage.json*

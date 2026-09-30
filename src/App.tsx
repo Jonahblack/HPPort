@@ -42,7 +42,7 @@ const INITIAL_CONFIG: AppConfig = {
   renderer: {
     width: 1024,
     height: 768,
-    fps: 60,
+    fps: 30,
     window_title: "Harry Potter Talking Portrait (Gemma 4)",
     background_color: [28, 24, 22],
     accent_color: [180, 140, 60],
@@ -63,7 +63,7 @@ const INITIAL_CONFIG: AppConfig = {
     language: "en-US",
     wake_word: "portrait",
     stop_phrase: "goodbye portrait",
-    gemini_model: "gemma-4-e2b-instruction",
+    gemini_model: "gemini-3.5-flash-lite",
     system_prompt:
       "You are Wilhelm, the eccentric, valiant knight sealed inside a magical Hogwarts portrait. You believe every conversation is a grand quest. Answer in 1 to 3 vivid sentences. Be bold, boast of slaying beasts, and challenge the user to noble deeds!",
     listen_timeout_seconds: 5.0,
@@ -92,12 +92,12 @@ const INITIAL_LAYERS: AssetLayerSet = {
 
 export const App: React.FC = () => {
   const [config, setConfig] = useState<AppConfig>(INITIAL_CONFIG);
-  const [state, setState] = useState<PortraitState>(PortraitState.IDLE);
+  const [state, setStateValue] = useState<PortraitState>(PortraitState.IDLE);
   const [mouthLevel, setMouthLevel] = useState<number>(0);
   const [statusText, setStatusText] = useState<string>("Waiting for a person or wake word.");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [speechToSay, setSpeechToSay] = useState<string | null>(null);
-  const [nextStateAfterSpeech, setNextStateAfterSpeech] = useState<PortraitState>(PortraitState.LISTENING);
+  const nextStateAfterSpeech = useRef<PortraitState>(PortraitState.LISTENING);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [personaType, setPersonaType] = useState<PersonaType>("photo_portrait");
   const [cooldownRemaining, setCooldownRemaining] = useState<number>(0);
@@ -107,20 +107,42 @@ export const App: React.FC = () => {
   const [isForceBlinking, setIsForceBlinking] = useState<boolean>(false);
   const [showGuides, setShowGuides] = useState<boolean>(false);
 
-  const [latencyMetrics, setLatencyMetrics] = useState<LatencyMetrics>({
-    sttDuration: 0.62,
-    llmTimeFirstToken: 0.74,
-    llmTokensPerSec: 18.5,
-    ttsFirstAudio: 0.31,
-    totalTurnLatency: 1.45,
-  });
+  const [latencyMetrics, setLatencyMetrics] = useState<Partial<LatencyMetrics> & { replyReadySeconds?: number }>({});
 
   const stateRef = useRef(state);
   stateRef.current = state;
+  const setState = useCallback((next: PortraitState) => {
+    stateRef.current = next;
+    setStateValue(next);
+  }, []);
   const configRef = useRef(config);
   configRef.current = config;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const wakeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  const turnVersionRef = useRef(0);
+  const turnStartedRef = useRef<number | null>(null);
+
+  const cancelPendingWork = useCallback(() => {
+    turnVersionRef.current += 1;
+    requestRef.current?.abort();
+    requestRef.current = null;
+    if (wakeTimerRef.current !== null) clearTimeout(wakeTimerRef.current);
+    wakeTimerRef.current = null;
+    turnStartedRef.current = null;
+  }, []);
+
+  const resetConversation = useCallback(() => {
+    cancelPendingWork();
+    setState(PortraitState.IDLE);
+    setSpeechToSay(null);
+    setMouthLevel(0);
+    setStatusText("Waiting for a person or wake word.");
+    setLatencyMetrics({});
+  }, [cancelPendingWork, setState]);
+
+  useEffect(() => cancelPendingWork, [cancelPendingWork]);
 
   // Add message to transcript log
   const appendMessage = useCallback((role: "user" | "model" | "system", text: string) => {
@@ -132,13 +154,15 @@ export const App: React.FC = () => {
       timestamp: timeStr,
       state: stateRef.current,
     };
-    setMessages((prev) => [...prev, newMsg]);
+    const updated = [...messagesRef.current, newMsg].slice(-200);
+    messagesRef.current = updated;
+    setMessages(updated);
   }, []);
 
   // Trigger speech playback helper
   const triggerSpeech = useCallback((text: string, next: PortraitState) => {
     setSpeechToSay(text);
-    setNextStateAfterSpeech(next);
+    nextStateAfterSpeech.current = next;
     setState(PortraitState.SPEAKING);
     setStatusText(text.length > 60 ? text.substring(0, 60) + "..." : text);
     appendMessage("model", text);
@@ -152,7 +176,9 @@ export const App: React.FC = () => {
     setStatusText(`Confirming visitor arrival (${source})...`);
 
     // Confirm presence -> GREETING
-    setTimeout(() => {
+    wakeTimerRef.current = setTimeout(() => {
+      wakeTimerRef.current = null;
+      if (stateRef.current !== PortraitState.WAKE_PENDING) return;
       setState(PortraitState.GREETING);
       const greeting =
         source === "camera"
@@ -183,72 +209,96 @@ export const App: React.FC = () => {
     manualTrigger: manualCameraTrigger,
   } = useCameraStream({
     config: config.camera,
-    onTrigger: () => handleTrigger("camera"),
+    onTrigger: handleTrigger,
     currentState: state,
   });
 
 
-  // Handle User Utterance / Input -> THINKING -> Gemma 4 -> Piper TTS
+  // Browser preview: submit text, then use the same browser voice for every model.
   const handleUserInput = useCallback(async (userText: string) => {
-    const sttStartTime = performance.now();
+    userText = userText.trim();
+    if (!userText || ![PortraitState.IDLE, PortraitState.WAKE_PENDING, PortraitState.LISTENING].includes(stateRef.current)) return;
+    cancelPendingWork();
+    const turnVersion = turnVersionRef.current;
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const historyLimit = Math.max(0, Math.min(50, Math.floor(configRef.current.conversation.max_history_messages)));
+    const history = historyLimit > 0
+      ? messagesRef.current.filter((message) => message.role !== "system").slice(-historyLimit)
+      : [];
+    turnStartedRef.current = performance.now();
     appendMessage("user", userText);
+    setSpeechToSay(null);
     setState(PortraitState.THINKING);
-    setStatusText("Wilhelm is consulting Gemma 4...");
+    setStatusText("Wilhelm is considering your words...");
+    setLatencyMetrics({});
 
-    const sttDuration = Math.max(0.4, (performance.now() - sttStartTime) / 1000);
     const thinkingStart = performance.now();
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           message: userText,
-          history: messagesRef.current.map((m) => ({ role: m.role, text: m.text })),
+          history: history.map((m) => ({ role: m.role, text: m.text })),
           systemPrompt: configRef.current.conversation.system_prompt,
           model: configRef.current.conversation.gemini_model,
         }),
       });
-
-      const totalThinkingTime = (performance.now() - thinkingStart) / 1000;
-      const ttft = Math.min(0.8, totalThinkingTime * 0.45);
-      const ttsFirstAudio = 0.28;
 
       if (!response.ok) {
         throw new Error("Chat request failed");
       }
 
       const data = await response.json();
-      const reply = data.reply || data.text || "By my troth, a mysterious force blocks my thoughts!";
+      if (turnVersion !== turnVersionRef.current) return;
+      const replyText = data.reply || data.text;
+      const reply = typeof replyText === "string" && replyText.trim()
+        ? replyText.trim() : "By my troth, a mysterious force blocks my thoughts!";
 
       // Update telemetry latency stats
       setLatencyMetrics({
-        sttDuration: parseFloat(sttDuration.toFixed(2)),
-        llmTimeFirstToken: parseFloat(ttft.toFixed(2)),
-        llmTokensPerSec: 22.4,
-        ttsFirstAudio: ttsFirstAudio,
-        totalTurnLatency: parseFloat((sttDuration + ttft + ttsFirstAudio).toFixed(2)),
+        replyReadySeconds: (performance.now() - thinkingStart) / 1000,
       });
 
       // Speak answer -> Return to LISTENING
       triggerSpeech(reply, PortraitState.LISTENING);
     } catch (err) {
-      console.warn("Gemma fallback used:", err);
+      if (turnVersion !== turnVersionRef.current) return;
+      console.warn("Conversation request failed:", err);
       const fallbackReply = "Fie! My enchanted connection wavers, yet my sword remains stout! What else do you ask?";
       triggerSpeech(fallbackReply, PortraitState.LISTENING);
+    } finally {
+      clearTimeout(timeout);
+      if (requestRef.current === controller) requestRef.current = null;
     }
-  }, [appendMessage, triggerSpeech]);
+  }, [appendMessage, triggerSpeech, cancelPendingWork, setState]);
 
   // Handle Stop Phrase -> Farewell -> COOLDOWN -> IDLE
   const handleStopPhrase = useCallback(() => {
+    cancelPendingWork();
     const farewell = configRef.current.conversation.farewell;
     setStatusText(farewell);
     triggerSpeech(farewell, PortraitState.COOLDOWN);
-  }, [triggerSpeech]);
+  }, [triggerSpeech, cancelPendingWork]);
+
+  const handleSpeechStart = useCallback((delaySeconds: number) => {
+    const startedAt = turnStartedRef.current;
+    setLatencyMetrics((previous) => ({
+      ...previous,
+      ttsFirstAudio: delaySeconds,
+      totalTurnLatency: startedAt === null ? undefined : (performance.now() - startedAt) / 1000,
+    }));
+  }, []);
 
   // Speech finished callback
   const handleSpeechDone = useCallback(() => {
-    const next = nextStateAfterSpeech;
+    if (stateRef.current !== PortraitState.SPEAKING) return;
+    const next = nextStateAfterSpeech.current;
+    turnStartedRef.current = null;
     setState(next);
     setSpeechToSay(null);
     setMouthLevel(0);
@@ -261,7 +311,7 @@ export const App: React.FC = () => {
     } else if (next === PortraitState.IDLE) {
       setStatusText("Waiting for a person or wake word.");
     }
-  }, [nextStateAfterSpeech]);
+  }, [setState]);
 
   // Cooldown countdown timer
   useEffect(() => {
@@ -299,19 +349,17 @@ export const App: React.FC = () => {
           handleUserInput("What great beasts have you slain, Wilhelm?");
         }
       } else if (e.code === "Escape") {
-        setState(PortraitState.IDLE);
-        setSpeechToSay(null);
-        setMouthLevel(0);
-        setStatusText("Waiting for a person or wake word.");
+        resetConversation();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleTrigger, handleUserInput]);
+  }, [handleTrigger, handleUserInput, resetConversation]);
 
   // Persona switch handler
   const handleSelectPersona = (p: PersonaType) => {
+    resetConversation();
     setPersonaType(p);
     if (p === "talking_fish") {
       setConfig((prev) => ({
@@ -345,12 +393,12 @@ export const App: React.FC = () => {
   };
 
   const handleResetDefaults = () => {
+    resetConversation();
     setConfig(INITIAL_CONFIG);
     setPersonaType("photo_portrait");
     setCustomLayers(INITIAL_LAYERS);
     setMessages([]);
-    setState(PortraitState.IDLE);
-    setStatusText("Waiting for a person or wake word.");
+    messagesRef.current = [];
   };
 
   const handleUpdateLayer = (layerName: keyof AssetLayerSet, dataUrl: string | null) => {
@@ -364,6 +412,8 @@ export const App: React.FC = () => {
     setCustomLayers(INITIAL_LAYERS);
   };
 
+  const formatSeconds = (value: number | undefined) => value === undefined ? "—" : `${value.toFixed(2)}s`;
+
   return (
     <main className="min-h-screen bg-stone-950 text-stone-100 flex flex-col selection:bg-amber-900 selection:text-amber-100">
       {/* Top Header Bar */}
@@ -376,11 +426,11 @@ export const App: React.FC = () => {
             <h1 className="font-cinzel text-base sm:text-lg font-bold tracking-wider text-amber-100 flex items-center gap-2">
               HARRY POTTER TALKING PORTRAIT
               <span className="text-[10px] font-sans font-normal px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-800 flex items-center gap-1">
-                <Cpu className="w-2.5 h-2.5" /> Gemma 4 &middot; Pi 5
+                <Cpu className="w-2.5 h-2.5" /> Browser Preview &middot; Pi 5 Companion
               </span>
             </h1>
             <p className="text-[11px] text-stone-400">
-              Low-Latency Local Architecture &middot; Hailo Vision &middot; Piper TTS &middot; 2D Layered Engine
+              Browser Camera &middot; Consistent Browser Voice &middot; Animated Portrait
             </p>
           </div>
         </div>
@@ -413,12 +463,7 @@ export const App: React.FC = () => {
             </button>
           ) : (
             <button
-              onClick={() => {
-                setState(PortraitState.IDLE);
-                setSpeechToSay(null);
-                setMouthLevel(0);
-                setStatusText("Returned to Idle.");
-              }}
+              onClick={resetConversation}
               className="bg-stone-800 hover:bg-stone-700 text-stone-300 px-3.5 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition-all cursor-pointer font-cinzel"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -444,19 +489,19 @@ export const App: React.FC = () => {
         </div>
         <div className="flex flex-wrap items-center gap-4 text-[11px]">
           <span className="text-stone-400">
-            STT: <strong className="text-amber-200">{latencyMetrics.sttDuration}s</strong>
+            STT: <strong className="text-amber-200">{formatSeconds(latencyMetrics.sttDuration)}</strong>
           </span>
           <span className="text-stone-400">
-            Gemma TTFT: <strong className="text-amber-200">{latencyMetrics.llmTimeFirstToken}s</strong>
+            Reply Ready: <strong className="text-amber-200">{formatSeconds(latencyMetrics.replyReadySeconds)}</strong>
           </span>
           <span className="text-stone-400">
-            Generation: <strong className="text-amber-200">{latencyMetrics.llmTokensPerSec} tok/s</strong>
+            Generation: <strong className="text-amber-200">—</strong>
           </span>
           <span className="text-stone-400">
-            TTS First Audio: <strong className="text-amber-200">{latencyMetrics.ttsFirstAudio}s</strong>
+            TTS First Audio: <strong className="text-amber-200">{formatSeconds(latencyMetrics.ttsFirstAudio)}</strong>
           </span>
           <span className="text-stone-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/80">
-            Turn Latency: <strong className="text-amber-300 font-bold">{latencyMetrics.totalTurnLatency}s</strong>
+            Turnaround: <strong className="text-amber-300 font-bold">{formatSeconds(latencyMetrics.totalTurnLatency)}</strong>
           </span>
         </div>
       </div>
@@ -521,10 +566,10 @@ export const App: React.FC = () => {
             <div className="flex items-center gap-3 text-[11px]">
               <span className="flex items-center gap-1 text-emerald-400">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Hailo Vision Ready
+                {cameraStatus.active ? "Camera ready" : "Camera idle"}
               </span>
               <span className="text-stone-500">&bull;</span>
-              <span className="text-stone-300">Piper TTS &middot; Gemma 4</span>
+              <span className="text-stone-300">Browser Voice &middot; Gemini</span>
             </div>
           </div>
 
@@ -576,6 +621,7 @@ export const App: React.FC = () => {
             setMouthLevel={setMouthLevel}
             speechTextToSay={speechToSay}
             onSpeechDone={handleSpeechDone}
+            onSpeechStart={handleSpeechStart}
             isDemoMode={config.demo_mode.enabled}
           />
 
@@ -583,8 +629,11 @@ export const App: React.FC = () => {
           <TranscriptLog
             messages={messages}
             currentState={state}
-            onClear={() => setMessages([])}
-            onReplay={(txt) => triggerSpeech(txt, state)}
+            onClear={() => { messagesRef.current = []; setMessages([]); }}
+            onReplay={(txt) => {
+              cancelPendingWork();
+              triggerSpeech(txt, stateRef.current === PortraitState.IDLE ? PortraitState.IDLE : PortraitState.LISTENING);
+            }}
           />
         </section>
       </div>

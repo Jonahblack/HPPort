@@ -1,129 +1,114 @@
-# Raspberry Pi 5 & Hailo AI HAT Deployment Guide
+# Raspberry Pi setup
 
-This guide details setting up the **Harry Potter Talking Portrait** on a Raspberry Pi 5 with an external Samsung SSD, Hailo AI HAT, Pi Camera, USB Microphone, and Bluetooth audio.
+Use a Raspberry Pi 5 with 64-bit Raspberry Pi OS, active cooling, an HDMI display, microphone, and speakers. An 8 GB model and SSD provide more room for local models. USB or wired audio generally avoids the extra latency of Bluetooth. The Pi 5 has no built-in 3.5 mm audio jack; use USB, HDMI, Bluetooth, or an audio DAC.
 
-## Hardware Connections
+The camera currently uses CPU motion detection. A Hailo AI HAT is not required and will not accelerate Whisper, llama.cpp, or Piper in this implementation.
 
-1. **Raspberry Pi 5**: 8GB recommended.
-2. **Hailo AI HAT**: Installed on the PCIe slot.
-3. **External SSD**: Formatted (ext4) and mounted at `/mnt/portrait`.
-4. **Display**: HDMI connected to Pi 5 (running full-screen 1080p or 720p).
-5. **Camera**: Raspberry Pi Camera Module 3 attached via CSI ribbon cable.
-6. **Microphone**: USB microphone.
-7. **Audio Output**: Bluetooth speaker or 3.5mm DAC.
+## 1. Environment
 
----
-
-## 1. External SSD Directory Structure & Permissions
-
-Set up the directory hierarchy on the external SSD mounted at `/mnt/portrait`:
+Run from the project directory:
 
 ```bash
-# 1. Mount the external SSD
-sudo mkdir -p /mnt/portrait
-sudo mount /dev/sda1 /mnt/portrait
-
-# 2. Fix ownership permissions immediately for regular user operations
-sudo chown -R $USER:$USER /mnt/portrait
-
-# 3. Create model, cache, audio, and log directories on the SSD
-mkdir -p /mnt/portrait/models/gemma
-mkdir -p /mnt/portrait/models/stt
-mkdir -p /mnt/portrait/models/piper
-mkdir -p /mnt/portrait/models/hailo
-mkdir -p /mnt/portrait/cache
-mkdir -p /mnt/portrait/audio
-mkdir -p /mnt/portrait/logs
+sudo apt update
+sudo apt install -y python3-venv python3-dev portaudio19-dev python3-pyaudio \
+  python3-picamera2 libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 \
+  libsdl2-ttf-2.0-0 alsa-utils ffmpeg
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-piper.txt
 ```
 
----
+Use the system Python with `--system-site-packages` so apt's Picamera2/libcamera bindings remain visible. Raspberry Pi OS requires pip packages to be installed in a virtual environment; see [the OS documentation](https://www.raspberrypi.com/documentation/computers/os.html).
 
-## 2. Setting Up Gemma 4 with llama.cpp on Pi 5
+Bookworm's Python 3.11 camera stack needs NumPy 1.x. The requirements preserve that constraint and cap OpenCV below the release that forces NumPy 2. Python 3.13 uses NumPy 2.x wheels; do not mix a newer Python runtime with older OS camera bindings. Use a fresh venv if an existing environment already has incompatible NumPy/OpenCV packages.
 
-> **Note on Build Location**: Build `llama.cpp` in the user's home directory (`~/llama.cpp`) to avoid symlink and shared library permissions errors on non-ext4 filesystems. Model weights reside on the SSD.
+## 2. Storage and local model
 
-Compile and install `llama.cpp` for ARM64 with NEON acceleration:
+Mount your existing SSD at `/mnt/portrait` using your normal mount configuration. Confirm this is the intended disk before creating directories. The app user needs write access to its cache, audio, and model-download directories.
 
 ```bash
-cd ~
-git clone https://github.com/ggerganov/llama.cpp
-cd llama.cpp
-cmake -B build -DGGML_NATIVE=ON
-cmake --build build --config Release -j4
+mkdir -p /mnt/portrait/models/{gemma,stt,piper}
+mkdir -p /mnt/portrait/{cache,audio,logs}
 ```
 
-Download the quantized Gemma 4 E2B Instruction GGUF model directly via Unsloth (no HF authentication required):
-```bash
-wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf \
-  https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
-```
+If no SSD is mounted, change all `hardware`/`tts` paths in `portrait_config.json` to writable directories on the Pi. Do not run the portrait as root to work around permissions.
 
-Start the persistent `llama-server` background service:
+Run an ARM64 build of [llama.cpp](https://github.com/ggml-org/llama.cpp) and a compatible instruction-tuned GGUF model. Keep an existing working model; the app discovers the server's model ID. The current configuration uses Gemma 4 E2B. Point the command at the file you actually downloaded:
+
 ```bash
 ~/llama.cpp/build/bin/llama-server \
   -m /mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf \
-  --port 8080 \
-  --host 127.0.0.1 \
-  -t 4 \
-  -tb 4 \
-  -c 512 \
-  -np 1 \
-  -b 256 \
-  -ub 256 \
-  --flash-attn on \
-  --reasoning off \
-  --reasoning-budget 0 \
-  --no-webui
+  --host 127.0.0.1 --port 8080 \
+  -t 3 -tb 3 -c 1024 -np 1 -b 128 -ub 128 \
+  --reasoning off --reasoning-budget 0 --no-webui
 ```
 
----
+These are starting settings, not a measured optimum. Three inference threads leave CPU capacity for audio and the display. Benchmark your model; a smaller quantized model may improve response time more than application tuning. Check your installed `llama-server --help` for supported flags. Increase context size if your system prompt/history needs more space. Hidden reasoning can exhaust short output limits, so disable it for this short spoken persona when the model/server supports that setting.
 
-## 3. Setting Up Hailo AI HAT+ (13 TOPS / Hailo-8L)
+Whisper downloads `tiny.en` on first use into `hardware.models_dir/stt` by default. To run entirely offline, let that download finish first, or set `stt.model_size` to a local faster-whisper model directory. Set `stt.local_files_only: true` after the files are cached if you want missing files to fail without downloading.
 
-1. Enable PCIe in `/boot/firmware/config.txt`:
-   ```ini
-   dtparam=pciex1
-   ```
-   Save and reboot the Pi:
-   ```bash
-   sudo reboot
-   ```
-2. Install Hailo runtime packages and Python bindings:
-   ```bash
-   sudo apt update && sudo apt install -y hailo-all python3-hailort python3-picamera2
-   ```
-3. Verify device detection:
-   ```bash
-   hailortcli scan
-   ```
-4. Download the Hailo-8L compatible YOLOv8 Person Detection model:
-   ```bash
-   wget -O /mnt/portrait/models/hailo/yolov8s_person.hef \
-     https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.13.0/hailo8l/yolov8s.hef
-   ```
+## 3. Piper voice
 
----
+Download the voice and matching config:
 
-## 4. Setting Up Piper TTS
+```bash
+cd /mnt/portrait/models/piper
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx
+wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json
+```
 
-1. Download the Piper arm64 binary and voice models:
-   ```bash
-   sudo chown -R $USER:$USER /mnt/portrait
-   cd /mnt/portrait/models/piper
-   wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz
-   tar -xzf piper_arm64.tar.gz
-   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx
-   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json
-   ```
+`requirements-piper.txt` installs the optional [Piper Python runtime](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/API_PYTHON.md), which retains the voice in memory. Leave `tts.runtime: "auto"` to use it when available. If using an existing standalone arm64 Piper installation, set `tts.piper_binary_path` to its executable and optionally `runtime: "cli"`. Extracted archives may have an extra `piper/` directory; executable discovery handles that layout.
 
----
+The default greeting warms the cache at startup. Cached utterances are capped at 128. If both Python and CLI synthesis fail, the application reports an error and enters cooldown. Synthetic tones are confined to demo mode unless you explicitly enable `tts.allow_synthetic_fallback`.
 
-## 5. Running the Application on Boot
+## 4. Voice routes and microphone
 
-Launch the portrait in full-screen production mode:
+From the project directory, copy `.env.example` to `.env` and set `GEMINI_API_KEY` for optional cloud responses. The native app reads `.env` beside its configuration file; environment variables take precedence. Use `conversation_mode: "local"` for offline inference.
+
+Keep `gemini_live.response_voice: "piper"` for identical speech synthesis across models. To audition Gemini's own Charon voice, set it to `"native"`; native cloud audio and local Piper have distinct timbres. `gemini_live.text_model` and `gemini_live.model` select text and native-audio models independently.
+
+Audio defaults use the operating system's selected input device rather than a hard-coded ALSA card number. If needed, select a stable microphone name with `stt.microphone_name`. Use `stt.arecord_device` only when the PortAudio input route is unavailable and the arecord fallback needs an explicit ALSA device.
+
+```bash
+arecord -l
+aplay -l
+python tools/diagnose_audio.py --help
+```
+
+`state_machine.silence_timeout_seconds` is the initial wait for someone to speak (four seconds). `stt.pause_threshold` is the silence *after speech* that ends the phrase (0.5 seconds). Increase the latter for speakers who pause often. `max_listen_duration_seconds` caps a spoken phrase at ten seconds. Leave `stt.allow_online_fallback: false` for predictable local transcription.
+
+## 5. Start and verify
+
+From the project directory with the venv active:
 
 ```bash
 python main.py --fullscreen --config portrait_config.json
 ```
 
-Or configure a systemd service (`/etc/systemd/system/portrait.service`) to auto-start on display login.
+Test **T** for a response without camera/microphone input. Use **Space** to simulate presence, **C** for the camera preview, and **H** for latency diagnostics. Verify microphone input after the greeting and after several consecutive replies. Test local mode, cloud mode, quota/network fallback, and shutdown during playback.
+
+The `stt` HUD value includes waiting/capture and transcription. `llm_ttft` measures the first speakable clause, not the first raw token. `turnaround` measures completed transcript to actual playback, including synthesis; it excludes the time spent recording the user. These distinctions matter when comparing recordings with displayed timing.
+
+```bash
+python tools/benchmark_renderer.py
+```
+
+Run that benchmark on the actual Pi display to measure render work without the frame-rate sleep. Check temperatures and CPU use during several minutes of conversation. Lower `renderer.width`/`height` if necessary, and keep diagnostics/camera overlays off for the normal experience.
+
+## 6. Optional desktop autostart
+
+Start from a logged-in graphical desktop first. A system-wide service with a hard-coded user, system Python, or missing audio/display session often fails even when a terminal run works.
+
+For desktop autostart, create a `.desktop` entry in `~/.config/autostart/` using absolute paths for your checkout and venv:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Talking Portrait
+Path=/home/YOUR_USER/HPPort
+Exec=/home/YOUR_USER/HPPort/.venv/bin/python /home/YOUR_USER/HPPort/main.py --fullscreen
+Terminal=false
+```
+
+Replace `YOUR_USER` and the checkout path. Start llama-server separately before relying on local inference. Console-only KMS/DRM startup and systemd display/audio-session integration depend on your OS/session and are not validated by the desktop tests.

@@ -45,12 +45,15 @@ class SaccadeController:
         self.target_offset_x = 0.0
         self.target_offset_y = 0.0
 
-        self.next_saccade_time = time.time() + random.uniform(self.min_interval, self.max_interval)
+        self._last_update = time.monotonic()
+        self.next_saccade_time = self._last_update + random.uniform(self.min_interval, self.max_interval)
         self.saccade_end_time = 0.0
 
     def update(self) -> Tuple[float, float]:
         """Update and return (jitter_x, jitter_y) in pixels."""
-        now = time.time()
+        now = time.monotonic()
+        delta = min(0.1, max(0.0, now - self._last_update))
+        self._last_update = now
 
         if now >= self.next_saccade_time:
             angle = random.uniform(0.0, math.tau)
@@ -64,7 +67,7 @@ class SaccadeController:
             self.target_offset_x = 0.0
             self.target_offset_y = 0.0
 
-        lerp_speed = 0.35
+        lerp_speed = 1.0 - math.exp(-26.0 * delta)
         self.current_offset_x += (self.target_offset_x - self.current_offset_x) * lerp_speed
         self.current_offset_y += (self.target_offset_y - self.current_offset_y) * lerp_speed
 
@@ -84,7 +87,7 @@ class BlinkController:
         self.max_interval = max_interval_sec
         self.blink_duration_sec = max(0.12, blink_duration_ms / 1000.0)
 
-        self.next_blink_time = time.time() + random.uniform(self.min_interval, self.max_interval)
+        self.next_blink_time = time.monotonic() + random.uniform(self.min_interval, self.max_interval)
         self.is_blinking = False
         self.blink_start_time = 0.0
         self.closure_progress = 0.0
@@ -92,7 +95,7 @@ class BlinkController:
 
     def update(self) -> bool:
         """Call each frame. Returns True if eyes are not fully open."""
-        now = time.time()
+        now = time.monotonic()
 
         if not self.is_blinking:
             self.closure_progress = 0.0
@@ -156,7 +159,7 @@ class LipSyncEngine:
 
         self.current_viseme = "X"
         self.previous_viseme = "X"
-        self.viseme_change_time = time.time()
+        self.viseme_change_time = time.monotonic()
 
     def analyze_wav(self, wav_path: str, fps: int = 60) -> List[Dict[str, Any]]:
         """Convert a WAV file into a list of frame animation dicts containing:
@@ -304,13 +307,13 @@ class LipSyncEngine:
         if viseme != self.current_viseme:
             self.previous_viseme = self.current_viseme
             self.current_viseme = viseme
-            self.viseme_change_time = time.time()
+            self.viseme_change_time = time.monotonic()
 
     def get_crossfade_alpha(self) -> float:
         """Returns 0.0 to 1.0 progress of the transition between previous and current viseme."""
         if self.crossfade_duration <= 0:
             return 1.0
-        elapsed = time.time() - self.viseme_change_time
+        elapsed = time.monotonic() - self.viseme_change_time
         return min(1.0, max(0.0, elapsed / self.crossfade_duration))
 
     def _load_rhubarb_json(self, path: str) -> List[Dict[str, Any]]:

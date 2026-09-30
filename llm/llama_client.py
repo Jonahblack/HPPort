@@ -32,12 +32,44 @@ class LlamaClient(BaseLLMClient):
             "system_prompt",
             "You are Wilhelm, an eccentric knight in a magical portrait. Speak boldly in 1-3 short sentences.",
         )
+        # Reuse TCP connections between discovery and conversational turns.
+        self._session = requests.Session()
+
+    def close(self) -> None:
+        self._session.close()
+
+    def _messages(self, user_message, conversation_history, system_prompt):
+        messages = [{"role": "system", "content": system_prompt or self.system_prompt}]
+        if conversation_history and self.history_turn_limit > 0:
+            valid = [item for item in conversation_history if item.get("role") in ("user", "assistant")]
+            messages.extend(
+                {"role": item["role"], "content": item.get("content", "")}
+                for item in valid[-self.history_turn_limit * 2:]
+            )
+        messages.append({"role": "user", "content": user_message})
+        return messages
+
+    def _payload(self, user_message, conversation_history, system_prompt, stream):
+        payload = {
+            "model": self._resolve_model_name(),
+            "messages": self._messages(user_message, conversation_history, system_prompt),
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "n_predict": self.max_tokens,
+            "stream": stream,
+            "cache_prompt": self.cache_prompt,
+        }
+        if self.disable_reasoning:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        return payload
 
     @staticmethod
     def _normalize_endpoint_url(endpoint_url: str) -> str:
         trimmed = endpoint_url.rstrip("/")
         if trimmed.endswith("/v1/chat/completions"):
             return trimmed
+        if trimmed.endswith("/v1"):
+            return f"{trimmed}/chat/completions"
         if "/v1/" in trimmed:
             return trimmed
         return f"{trimmed}/v1/chat/completions"
@@ -69,8 +101,9 @@ class LlamaClient(BaseLLMClient):
             return self._resolved_model_name
 
         requested = self.model_name
+        resp = None
         try:
-            resp = requests.get(
+            resp = self._session.get(
                 self._models_endpoint(),
                 timeout=(self.connect_timeout, min(self.timeout, 15.0)),
             )
@@ -103,8 +136,11 @@ class LlamaClient(BaseLLMClient):
                 self._resolved_model_name = candidates[0]
                 print(f"[LLM] Using sole available model '{candidates[0]}'")
                 return candidates[0]
-        except requests.exceptions.RequestException as exc:
+        except (requests.exceptions.RequestException, ValueError) as exc:
             print(f"[LLM] Model discovery notice: {exc}")
+        finally:
+            if resp is not None:
+                resp.close()
 
         self._resolved_model_name = requested
         return requested
@@ -115,43 +151,20 @@ class LlamaClient(BaseLLMClient):
         conversation_history: Optional[List[Dict[str, str]]] = None,
         system_prompt: Optional[str] = None,
     ) -> str:
-        sys_prompt = system_prompt or self.system_prompt
-        messages = [{"role": "system", "content": sys_prompt}]
-
-        if conversation_history:
-            max_history_messages = max(0, self.history_turn_limit * 2)
-            for item in conversation_history[-max_history_messages:]:
-                role = item.get("role", "user")
-                if role in ("user", "assistant"):
-                    messages.append({"role": role, "content": item.get("content", "")})
-
-        messages.append({"role": "user", "content": user_message})
-
-        payload = {
-            "model": self._resolve_model_name(),
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "n_predict": self.max_tokens,
-            "stream": False,
-            "cache_prompt": self.cache_prompt,
-        }
-        if self.disable_reasoning:
-            # Supported by llama.cpp chat templates that expose optional thinking.
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-
-        start_time = time.time()
+        payload = self._payload(user_message, conversation_history, system_prompt, stream=False)
+        start_time = time.monotonic()
+        resp = None
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 self.endpoint_url,
                 json=payload,
                 timeout=(self.connect_timeout, self.timeout),
             )
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
 
             if resp.status_code == 200:
                 data = resp.json()
-                choice = data.get("choices", [{}])[0]
+                choice = (data.get("choices") or [{}])[0]
                 message = choice.get("message", {})
                 content = message.get("content", "")
                 if isinstance(content, list):
@@ -193,6 +206,12 @@ class LlamaClient(BaseLLMClient):
         except requests.exceptions.RequestException as e:
             print(f"[LLM] Connection error to {self.endpoint_url}: {e}")
             return "Hark! The castle magical currents are severed. Check that llama-server is awake!"
+        except (ValueError, TypeError, AttributeError) as exc:
+            print(f"[LLM] Invalid response from llama-server: {exc}")
+            return self.empty_response_text
+        finally:
+            if resp is not None:
+                resp.close()
 
     def generate_response_stream(
         self,
@@ -201,36 +220,14 @@ class LlamaClient(BaseLLMClient):
         system_prompt: Optional[str] = None,
     ):
         """Yield text tokens in real time from llama-server SSE stream."""
-        sys_prompt = system_prompt or self.system_prompt
-        messages = [{"role": "system", "content": sys_prompt}]
-
-        if conversation_history:
-            max_history_messages = max(0, self.history_turn_limit * 2)
-            for item in conversation_history[-max_history_messages:]:
-                role = item.get("role", "user")
-                if role in ("user", "assistant"):
-                    messages.append({"role": role, "content": item.get("content", "")})
-
-        messages.append({"role": "user", "content": user_message})
-
-        payload = {
-            "model": self._resolve_model_name(),
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "n_predict": self.max_tokens,
-            "stream": True,
-            "cache_prompt": self.cache_prompt,
-        }
-        if self.disable_reasoning:
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-
-        start_time = time.time()
+        payload = self._payload(user_message, conversation_history, system_prompt, stream=True)
+        start_time = time.monotonic()
         first_token_time = None
         accumulated_text = []
 
+        resp = None
         try:
-            resp = requests.post(
+            resp = self._session.post(
                 self.endpoint_url,
                 json=payload,
                 stream=True,
@@ -241,36 +238,43 @@ class LlamaClient(BaseLLMClient):
                 yield "By my troth, a mystical perturbation clouds my mind!"
                 return
 
-            for line in resp.iter_lines():
+            # Requests' default 512-byte buffer can hold several tokens before
+            # yielding a small SSE event, adding noticeable first-speech delay.
+            for line in resp.iter_lines(chunk_size=1):
                 if not line:
                     continue
                 line_str = line.decode("utf-8") if isinstance(line, bytes) else str(line)
-                if not line_str.startswith("data: "):
+                if not line_str.startswith("data:"):
                     continue
-                data_body = line_str[6:].strip()
+                data_body = line_str[5:].strip()
                 if data_body == "[DONE]":
                     break
                 try:
                     chunk = json.loads(data_body)
-                    choices = chunk.get("choices", [])
-                    if choices:
-                        delta = choices[0].get("delta", {})
-                        token = delta.get("content", "")
-                        if token:
-                            if first_token_time is None:
-                                first_token_time = time.time() - start_time
-                                print(f"[LLM] First token received in {first_token_time:.2f}s (TTFT)")
-                            accumulated_text.append(token)
-                            yield token
-                except Exception:
+                except json.JSONDecodeError:
                     continue
+                choices = chunk.get("choices", [])
+                if choices:
+                    token = choices[0].get("delta", {}).get("content", "")
+                    if isinstance(token, str) and token:
+                        if first_token_time is None:
+                            first_token_time = time.monotonic() - start_time
+                            print(f"[LLM] First token received in {first_token_time:.2f}s (TTFT)")
+                        accumulated_text.append(token)
+                        yield token
 
-            total_duration = time.time() - start_time
+            total_duration = time.monotonic() - start_time
             full_reply = "".join(accumulated_text).strip()
             rate = len(accumulated_text) / max(0.001, total_duration)
-            print(f"[LLM] Gemma streaming finished in {total_duration:.2f}s ({rate:.2f} tok/s): \"{full_reply}\"")
+            print(f"[LLM] Streaming finished in {total_duration:.2f}s ({rate:.2f} chunks/s): \"{full_reply}\"")
             if not full_reply:
                 yield self.empty_response_text
         except requests.exceptions.RequestException as e:
             print(f"[LLM] Streaming connection error: {e}")
+            # A mid-answer outage must not append an unrelated recovery sentence.
+            if accumulated_text:
+                raise
             yield "Hark! The castle magical currents are severed."
+        finally:
+            if resp is not None:
+                resp.close()

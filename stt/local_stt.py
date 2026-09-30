@@ -5,11 +5,12 @@ import io
 import math
 import os
 import re
+import select
 import shutil
 import subprocess
-import tempfile
 import time
 import wave
+from collections import deque
 from typing import Any, Dict, List, Optional
 
 from stt.base import BaseSTT
@@ -34,10 +35,22 @@ class LocalSTT(BaseSTT):
         self.language = stt_cfg.get("language", "en")
         self.device = stt_cfg.get("device", "cpu")
         self.compute_type = stt_cfg.get("compute_type", "int8")
+        self.model_download_root = os.path.expanduser(str(stt_cfg.get(
+            "model_download_root",
+            os.path.join(config.get("hardware", {}).get("models_dir", "/mnt/portrait/models"), "stt"),
+        )))
+        self.local_files_only = bool(stt_cfg.get("local_files_only", False))
         self.vad_filter = stt_cfg.get("vad_filter", True)
         self.energy_threshold = int(stt_cfg.get("energy_threshold", 300))
         self.dynamic_energy_threshold = bool(stt_cfg.get("dynamic_energy_threshold", True))
         self.ambient_calibration_seconds = float(stt_cfg.get("ambient_calibration_seconds", 0.3))
+        self.pause_threshold = max(0.1, float(stt_cfg.get("pause_threshold", 0.5)))
+        self.non_speaking_duration = min(
+            self.pause_threshold, max(0.0, float(stt_cfg.get("non_speaking_duration", 0.2)))
+        )
+        self.phrase_threshold = max(0.0, float(stt_cfg.get("phrase_threshold", 0.15)))
+        self.cpu_threads = max(1, int(stt_cfg.get("cpu_threads", 2)))
+        self.allow_online_fallback = bool(stt_cfg.get("allow_online_fallback", False))
         self.microphone_device_index = self._coerce_optional_int(stt_cfg.get("microphone_device_index"))
         self.microphone_name = str(stt_cfg.get("microphone_name", "")).strip()
         self.sample_rate = self._coerce_optional_int(stt_cfg.get("sample_rate"))
@@ -196,8 +209,10 @@ class LocalSTT(BaseSTT):
             self.recognizer = sr.Recognizer()
             self.recognizer.energy_threshold = self.energy_threshold
             self.recognizer.dynamic_energy_threshold = self.dynamic_energy_threshold
-            self.recognizer.pause_threshold = 0.5
-            self.recognizer.non_speaking_duration = 0.35
+            self.recognizer.pause_threshold = self.pause_threshold
+            self.recognizer.non_speaking_duration = self.non_speaking_duration
+            self.recognizer.phrase_threshold = self.phrase_threshold
+            self.recognizer.operation_timeout = 5.0
 
             device_names = self._list_audio_devices()
             preferred_index = self._default_input_index_from_sounddevice()
@@ -241,7 +256,15 @@ class LocalSTT(BaseSTT):
             from faster_whisper import WhisperModel  # type: ignore
 
             print(f"[STT] Loading faster-whisper model '{self.model_size}' ({self.compute_type})...")
-            self.model = WhisperModel(self.model_size, device=self.device, compute_type=self.compute_type)
+            self.model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type=self.compute_type,
+                cpu_threads=self.cpu_threads,
+                num_workers=1,
+                download_root=self.model_download_root,
+                local_files_only=self.local_files_only,
+            )
             print("[STT] Faster-Whisper model ready.")
         except Exception as exc:
             print(
@@ -269,7 +292,7 @@ class LocalSTT(BaseSTT):
             f"[STT] Listening for user speech "
             f"(device={self._selected_device_index}, timeout={timeout_seconds}s, max={max_duration_seconds}s)..."
         )
-        start_time = time.time()
+        start_time = time.monotonic()
 
         try:
             with self.microphone as source:
@@ -289,26 +312,22 @@ class LocalSTT(BaseSTT):
                     phrase_time_limit=max_duration_seconds,
                 )
 
-            record_duration = time.time() - start_time
+            record_duration = time.monotonic() - start_time
             print(f"[STT] Audio captured in {record_duration:.2f}s. Transcribing...")
 
             if self.model is not None:
-                wav_bytes = audio_data.get_wav_data()
+                wav_bytes = audio_data.get_wav_data(convert_rate=16000, convert_width=2)
                 wav_file = io.BytesIO(wav_bytes)
-                segments, _info = self.model.transcribe(
-                    wav_file,
-                    beam_size=1,
-                    language=self.language,
-                    vad_filter=self.vad_filter,
-                )
-                text = " ".join(segment.text for segment in segments).strip()
-                if text:
-                    duration = time.time() - start_time
-                    print(f"[STT] Faster-Whisper ({duration:.2f}s): \"{text}\"")
-                    return text
+                # An empty local result means silence/unclear speech, not a reason
+                # to make a second, slower network transcription request.
+                return self._transcribe_audio(wav_file)
+
+            if not self.allow_online_fallback:
+                print("[STT] No local transcription engine available; online fallback is disabled.")
+                return None
 
             text = self.recognizer.recognize_google(audio_data)
-            duration = time.time() - start_time
+            duration = time.monotonic() - start_time
             print(f"[STT] Fallback recognizer ({duration:.2f}s): \"{text}\"")
             return text
 
@@ -341,12 +360,11 @@ class LocalSTT(BaseSTT):
             return None
 
         sample_rate = int(self._selected_sample_rate or self.sample_rate or 16000)
-        temp_wav = ""
         # 50ms chunks of 16-bit mono PCM = sample_rate * 2 bytes * 0.05
         chunk_samples = max(1, int(sample_rate * 0.05))
         chunk_bytes = chunk_samples * 2
         threshold = max(180.0, float(self.energy_threshold) * 0.75)
-        consecutive_silence_threshold = 7  # ~350ms of silence after speech ends turn
+        consecutive_silence_threshold = max(1, math.ceil(self.pause_threshold / 0.05))
 
         cmd = [
             "arecord",
@@ -364,10 +382,14 @@ class LocalSTT(BaseSTT):
         ]
 
         captured_chunks: List[bytes] = []
+        # Preserve the onset without sending the whole initial silence window
+        # through Whisper. This also bounds memory when nobody is speaking.
+        pre_roll = deque(maxlen=max(1, math.ceil(self.non_speaking_duration / 0.05)))
         speech_started = False
         consecutive_silence = 0
-        start_time = time.time()
-        max_deadline = start_time + max_duration_seconds
+        voiced_chunks = 0
+        start_time = time.monotonic()
+        max_deadline = None
         initial_timeout_deadline = start_time + timeout_seconds
 
         print(
@@ -376,16 +398,18 @@ class LocalSTT(BaseSTT):
         )
 
         process = None
+        pending = bytearray()
         try:
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                bufsize=0,
             )
 
             while True:
-                now = time.time()
-                if now > max_deadline:
+                now = time.monotonic()
+                if max_deadline is not None and now >= max_deadline:
                     print(f"[STT] arecord reached maximum duration ({max_duration_seconds:.1f}s).")
                     break
 
@@ -396,11 +420,20 @@ class LocalSTT(BaseSTT):
                 if process.stdout is None:
                     break
 
-                raw_data = process.stdout.read(chunk_bytes)
+                deadline = max_deadline if speech_started else initial_timeout_deadline
+                ready, _, _ = select.select([process.stdout], [], [], max(0.0, min(0.1, deadline - now)))
+                if not ready:
+                    continue
+                # Unbuffered pipes may return less than requested. Gather one
+                # complete 50 ms block, while still checking capture deadlines.
+                raw_data = os.read(process.stdout.fileno(), chunk_bytes - len(pending))
                 if not raw_data:
                     break
-
-                captured_chunks.append(raw_data)
+                pending.extend(raw_data)
+                if len(pending) < chunk_bytes:
+                    continue
+                raw_data = bytes(pending)
+                pending.clear()
 
                 # Compute RMS energy of chunk
                 samples = array.array("h", raw_data)
@@ -413,14 +446,32 @@ class LocalSTT(BaseSTT):
                 if rms >= threshold:
                     if not speech_started:
                         speech_started = True
+                        max_deadline = time.monotonic() + max_duration_seconds
+                        captured_chunks.extend(pre_roll)
                         print(f"[STT] Voice activity detected (RMS: {rms:.1f})")
+                    voiced_chunks += 1
                     consecutive_silence = 0
                 else:
                     if speech_started:
                         consecutive_silence += 1
                         if consecutive_silence >= consecutive_silence_threshold:
+                            if voiced_chunks * 0.05 < self.phrase_threshold:
+                                # Discard isolated clicks; keep listening within
+                                # the original wait-for-speech window.
+                                speech_started = False
+                                max_deadline = None
+                                voiced_chunks = 0
+                                consecutive_silence = 0
+                                captured_chunks.clear()
+                                pre_roll.clear()
+                                continue
                             print(f"[STT] End of speech detected ({consecutive_silence * 50}ms silence).")
                             break
+
+                if speech_started:
+                    captured_chunks.append(raw_data)
+                else:
+                    pre_roll.append(raw_data)
 
         except Exception as exc:
             print(f"[STT] arecord streaming capture error: {exc}")
@@ -432,56 +483,55 @@ class LocalSTT(BaseSTT):
                 except Exception:
                     try:
                         process.kill()
+                        process.wait(timeout=0.3)
                     except Exception:
                         pass
+                if process.stdout is not None:
+                    process.stdout.close()
 
-        if not speech_started or not captured_chunks:
+        if not speech_started or not captured_chunks or voiced_chunks * 0.05 < self.phrase_threshold:
             print("[STT] arecord: No speech detected in capture window.")
             return None
 
-        total_audio_sec = (len(captured_chunks) * chunk_bytes) / (sample_rate * 2.0)
+        total_audio_sec = sum(map(len, captured_chunks)) / (sample_rate * 2.0)
         print(f"[STT] Captured {total_audio_sec:.2f}s of speech. Transcribing...")
 
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-                temp_wav = handle.name
-
-            with wave.open(temp_wav, "wb") as wf:
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
                 wf.setframerate(sample_rate)
                 wf.writeframes(b"".join(captured_chunks))
 
-            return self._transcribe_wav_file(temp_wav)
+            wav_buffer.seek(0)
+            return self._transcribe_audio(wav_buffer)
         except Exception as exc:
             print(f"[STT] arecord WAV processing error: {exc}")
             return None
-        finally:
-            if temp_wav and os.path.exists(temp_wav):
-                try:
-                    os.remove(temp_wav)
-                except Exception:
-                    pass
 
-    def _transcribe_wav_file(self, wav_path: str) -> Optional[str]:
-        start_time = time.time()
+    def _transcribe_audio(self, audio: Any) -> Optional[str]:
+        """Decode one short utterance without expensive sampling retries."""
+        start_time = time.monotonic()
         if self.model is None:
-            print("[STT] Faster-Whisper is not available, so arecord fallback cannot transcribe yet.")
+            print("[STT] Faster-Whisper is not available.")
             return None
 
         try:
             segments, _info = self.model.transcribe(
-                wav_path,
+                audio,
                 beam_size=1,
                 language=self.language,
                 vad_filter=self.vad_filter,
+                temperature=0.0,
+                condition_on_previous_text=False,
             )
             text = " ".join(segment.text for segment in segments).strip()
             if text:
-                duration = time.time() - start_time
+                duration = time.monotonic() - start_time
                 print(f"[STT] Faster-Whisper ({duration:.2f}s): \"{text}\"")
                 return text
-            print("[STT] No intelligible speech detected in arecord capture.")
+            print("[STT] No intelligible speech detected.")
             return None
         except Exception as exc:
             print(f"[STT] Faster-Whisper transcription error: {exc}")

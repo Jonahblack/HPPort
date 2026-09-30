@@ -1,377 +1,95 @@
-# Harry Potter Talking Portrait (Gemma 4 & Hailo AI)
+# Talking Portrait
 
-An interactive talking portrait application inspired by cinematic magical-school fantasy. It combines a 3D-rendered animated character, optical camera presence triggers, speech recognition, local or cloud LLM intelligence (**Gemma 4 / Gemini**), low-latency **Piper TTS**, and audio-synchronized speech animation.
+An animated, speaking portrait built primarily for **Raspberry Pi 5**. The native Python application combines camera motion triggers, local Whisper transcription, Gemini or a local llama.cpp model, and Piper speech. The React application is a separate browser demo and dashboard.
 
-The project can be run in two modes:
-1. **Interactive Web Application** (React 18 + Vite + Express backend + Canvas 2D + Web Speech + Gemini API).
-2. **Native Python Edge System** (Pygame + faster-whisper + llama.cpp + Piper + Hailo-8/8L NPU for Raspberry Pi 5 & Desktop).
+## Raspberry Pi quick start
 
----
-
-## Architecture Overview
-
-```text
-+-------------------------------------------------------------------------+
-|                    Cinematic Character Frame Renderer                  |
-|      Neutral + Blink + Audio-Driven Mouth Frames + Ambient Motion      |
-+-------------------------------------------------------------------------+
-                                    ^
-                                    | (Audio RMS Amplitudes, Visual State)
-+-------------------------------------------------------------------------+
-|                    Deterministic State Machine (FSM)                    |
-|   IDLE -> WAKE_PENDING -> GREETING -> LISTENING -> THINKING             |
-|                  -> SPEAKING -> LISTENING -> COOLDOWN                   |
-+-------------------------------------------------------------------------+
-       ^                   ^                     |               |
-       | (Person Detection)| (Audio Transcript)  v (Prompt)      v (Speech Text)
-+-------------+     +---------------+     +--------------+  +------------+
-| Vision      |     | Speech-to-Text|     | Gemma 4 /    |  | Piper TTS  |
-| (Hailo/Cam) |     | (Whisper/Web) |     | Gemini LLM   |  | (Audio RMS)|
-+-------------+     +---------------+     +--------------+  +------------+
-```
-
-### Cinematic Character Rendering Rules
-- **Production mode (`renderer.asset_mode: full_frames`)** uses matching 3D-rendered frames for neutral, blink, small speech, and wide speech poses.
-- **Lip synchronization** selects a speech frame from Piper WAV amplitude while natural blinking temporarily takes priority.
-- **Ambient animation** adds subtle camera drift, breathing motion, and procedural magical forest motes without requiring real-time 3D rendering.
-- **Legacy mode (`renderer.asset_mode: layered`)** remains available for transparent sprite overlays.
-- **1:1 Alignment**: Every character frame must use the same dimensions, camera, pose, lighting, and composition.
-
----
-
-## 1. Quick Start: Web Application (Desktop / Browser)
-
-The web application runs a full-featured dashboard with animated Canvas physics, Facial Features Studio, live optical camera triggers, and telemetry.
-
-### Prerequisites
-- **Node.js**: v18.0.0 or higher
-- **npm** or **bun** / **yarn**
-- **Modern Browser**: Chrome, Edge, Safari, or Firefox (with Camera and Microphone access)
-
-### Setup & Run
-
-1. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-
-2. **Configure environment variables:**
-   Create a `.env` file from `.env.example`:
-   ```bash
-   cp .env.example .env
-   ```
-   Add your Gemini API key (optional; built-in mock fallback will work if key is absent):
-   ```env
-   GEMINI_API_KEY=your_gemini_api_key_here
-   ```
-
-3. **Start the development server:**
-   ```bash
-   npm run dev
-   ```
-   Open your browser to `http://localhost:3000`.
-
-4. **Production build:**
-   ```bash
-   npm run build
-   npm start
-   ```
-
-### Web Dashboard Controls & Hotkeys
-- **`Spacebar`** or **Click Canvas**: Wake the portrait (simulates visitor presence).
-- **`T` key**: Injects a test question to exercise the STT $\rightarrow$ Gemma $\rightarrow$ TTS pipeline.
-- **`Esc` key**: Put the portrait to sleep (returns to `IDLE`).
-- **Layer Inspector**: Upload custom image layers or test mouth shapes in real-time with the RMS slider.
-- **Persona Preset Selector**: Switch between *Wilhelm (Photo Portrait)*, *Noble Alistair*, *Wilhelm the Trophy Fish*, and *Morgana the Witch*.
-
----
-
-## 2. Desktop Setup: Native Python Engine (macOS / Windows / Linux)
-
-Run the native Pygame application in demo mode on any desktop computer without needing specialized Raspberry Pi hardware.
-
-### Prerequisites
-- **Python**: 3.10, 3.11, or 3.12
-- **PortAudio & SDL2** (usually included with Pygame and sounddevice)
-
-### Installation
-
-1. **Create and activate a virtual environment:**
-   ```bash
-   python -m venv venv
-   # On macOS / Linux:
-   source venv/bin/activate
-   # On Windows (PowerShell):
-   venv\Scripts\Activate.ps1
-   ```
-
-2. **Install Python requirements:**
-   ```bash
-   sudo apt update
-   sudo apt install -y python3-pip python3-venv python3-pyaudio ffmpeg
-   pip install -r requirements.txt
-   ```
-
-   On Raspberry Pi OS / Debian, do not mix `apt` and `pip` in one command. Install OS packages with `apt`, then activate your virtual environment and run `python -m pip install ...` separately.
-   If you are using Raspberry Pi OS `python3-picamera2` from `apt` inside a `--system-site-packages` venv, keep `numpy` below `2.0` or `picamera2` can fail with a binary incompatibility error like `numpy.dtype size changed`.
-
-3. **Run in Desktop Demo Mode:**
-   ```bash
-   python main.py --demo
-   ```
-
-### Desktop Demo Hotkeys
-- **`Space`**: Simulate visitor approaching portrait (triggers vision detector).
-- **`t`**: Injects test question (`"What great beasts have you slain, Wilhelm?"`).
-- **`q`** or **`Esc`**: Clean exit.
-
-### Connecting Local Gemma 4 via `llama.cpp` on Desktop (Optional)
-
-1. Build `llama.cpp` or install `llama-server`.
-2. Launch Gemma 4 E2B Instruction:
-   ```bash
-   llama-server -m models/gemma-4-e2b-instruction.Q4_K_M.gguf --port 8080 -c 2048
-   ```
-3. Run the Python application without demo mocks:
-   ```bash
-   python main.py
-   ```
-
-### Running Automated Test Suite
-```bash
-python -m unittest discover tests
-```
-
----
-
-## 3. Raspberry Pi 5 & Hailo AI HAT Deployment (Production Edge Build)
-
-This setup runs the entire pipeline locally on a **Raspberry Pi 5** with hardware-accelerated vision, speech recognition, local LLM, and high-quality neural voice.
-
-```text
-Raspberry Pi 5 (8GB)
-├── External SSD (500GB / ext4 mounted at /mnt/portrait)
-├── Hailo-8L AI HAT (PCIe Gen 2 / Gen 3) -> YOLOv8 Person Detection (30 FPS, <5% CPU)
-├── CSI Camera Module 3 -> Video capture
-├── USB Microphone -> Audio input for faster-whisper
-├── Bluetooth / 3.5mm Speaker -> Audio output for Piper TTS
-└── HDMI Display (1080p / 720p Frame) -> Pygame KMS/DRM Fullscreen
-```
-
-### Step 1: External SSD Directory Setup & Permissions
-
-Format or connect your external SSD and mount it to `/mnt/portrait`. Clarify mounting with forward slashes and ensure permissions are assigned to the current user immediately:
+Use 64-bit Raspberry Pi OS, a USB microphone, speakers, and a display. An SSD is recommended for models. Follow [the Pi setup guide](docs/setup_pi.md) for model downloads, audio configuration, and startup.
 
 ```bash
-# 1. Mount the external SSD
-sudo mkdir -p /mnt/portrait
-sudo mount /dev/sda1 /mnt/portrait
-
-# 2. Fix ownership permissions immediately for regular user operations
-sudo chown -R $USER:$USER /mnt/portrait
-
-# 3. Create model, cache, audio, and log directories on the SSD
-mkdir -p /mnt/portrait/models/gemma
-mkdir -p /mnt/portrait/models/stt
-mkdir -p /mnt/portrait/models/piper
-mkdir -p /mnt/portrait/models/hailo
-mkdir -p /mnt/portrait/cache
-mkdir -p /mnt/portrait/audio
-mkdir -p /mnt/portrait/logs
+sudo apt update
+sudo apt install -y python3-venv python3-dev portaudio19-dev python3-pyaudio \
+  python3-picamera2 libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 \
+  libsdl2-ttf-2.0-0 alsa-utils ffmpeg
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-piper.txt
+python main.py --fullscreen
 ```
 
-### Step 2: Gemma 4 with `llama.cpp` (ARM64 NEON)
+Configure model paths in `portrait_config.json` before starting. Piper needs the Ryan medium `.onnx` voice and its `.onnx.json` configuration. The optional Python Piper runtime keeps the voice loaded; the standalone Piper executable also works.
 
-> **Note on Build Location**: To avoid symlink and shared library errors (`Operation not permitted`) caused by FAT32/exFAT or non-ext4 external SSDs, build `llama.cpp` directly in the user's home directory (`~/llama.cpp`). The compiled binary lives in `~/llama.cpp/build/bin/llama-server`, while model weights reside on the SSD.
-
-1. **Build `llama.cpp` in the Home Directory (`~`):**
-   ```bash
-   cd ~
-   git clone https://github.com/ggerganov/llama.cpp
-   cd llama.cpp
-   cmake -B build -DGGML_NATIVE=ON
-   cmake --build build --config Release -j4
-   ```
-
-2. **Download Gemma 4 E2B Instruction GGUF to SSD (Direct Unsloth GGUF, No HF token needed):**
-   ```bash
-   wget -O /mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf \
-     https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
-   ```
-
-3. **Start `llama-server` (loading model from SSD):**
-   ```bash
-   ~/llama.cpp/build/bin/llama-server \
-     -m /mnt/portrait/models/gemma/gemma-4-e2b-instruction.Q4_K_M.gguf \
-     --port 8080 \
-     --host 127.0.0.1 \
-     -t 4 \
-     -tb 4 \
-     -c 512 \
-     -np 1 \
-     -b 256 \
-     -ub 256 \
-     --flash-attn on \
-     --reasoning off \
-     --reasoning-budget 0 \
-     --no-webui
-   ```
-
-   The portrait handles one conversation at a time, so one server slot and a 512-token context avoid wasting Pi memory and CPU. Disabling reasoning is important: hidden reasoning can consume the short output budget and leave no text for Piper.
-
-### Step 3: Hailo AI HAT+ (13 TOPS / Hailo-8L) Vision Setup
-
-1. **Enable PCIe in `/boot/firmware/config.txt`:**
-   Add the following line to `/boot/firmware/config.txt`:
-   ```ini
-   dtparam=pciex1
-   ```
-   Save the file and reboot the Raspberry Pi:
-   ```bash
-   sudo reboot
-   ```
-
-2. **Install Hailo runtime and Python bindings:**
-   ```bash
-   sudo apt update
-   sudo apt install -y hailo-all python3-hailort python3-picamera2
-   ```
-
-3. **Verify Hailo-8L device detection:**
-   ```bash
-   hailortcli scan
-   ```
-
-4. **Download the Hailo-8L compatible YOLOv8 Person Detection model from the Hailo Model Zoo:**
-   ```bash
-   wget -O /mnt/portrait/models/hailo/yolov8s_person.hef \
-     https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled/v2.13.0/hailo8l/yolov8s.hef
-   ```
-
-### Step 4: Piper TTS Setup
-
-1. **Download and unpack the arm64 Piper binary and voice model:**
-   ```bash
-   # Ensure SSD permissions are intact
-   sudo chown -R $USER:$USER /mnt/portrait
-
-   cd /mnt/portrait/models/piper
-   wget https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz
-   tar -xzf piper_arm64.tar.gz
-   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx
-   wget https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json
-   ```
-
-   The Ryan medium voice is the V1 default. On a Pi 5 it is much faster than the 121 MB high voice, and repeated phrases such as the greeting are cached under `/mnt/portrait/cache/tts`.
-
-### Step 5: Configuration (`portrait_config.json`)
-
-Verify `/mnt/portrait` paths in `portrait_config.json`:
-```json
-{
-  "hardware": {
-    "target": "raspberry_pi_5",
-    "storage_mount_path": "/mnt/portrait",
-    "models_dir": "/mnt/portrait/models",
-    "cache_dir": "/mnt/portrait/cache",
-    "audio_dir": "/mnt/portrait/audio",
-    "logs_dir": "/mnt/portrait/logs"
-  },
-  "vision": {
-    "driver": "hailo",
-    "confidence_threshold": 0.55
-  },
-  "llm": {
-    "driver": "llama_client",
-    "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
-    "model_name": "gemma-4-e2b-instruction",
-    "timeout_seconds": 90.0
-  },
-  "stt": {
-    "driver": "local_stt",
-    "microphone_device_index": null,
-    "microphone_name": "",
-    "sample_rate": null
-  },
-  "tts": {
-    "driver": "piper",
-    "piper_binary_path": "/mnt/portrait/models/piper/piper",
-    "model_path": "/mnt/portrait/models/piper/en_US-ryan-medium.onnx",
-    "audio_driver": "auto",
-    "playback_sample_rate": 22050,
-    "playback_channels": 1
-  }
-}
-```
-
-### Step 6: Running the Portrait on Pi 5
+For a hardware-free preview:
 
 ```bash
-python main.py --fullscreen --config portrait_config.json
+python main.py --demo
 ```
 
-### Step 7: Auto-Start on Boot (systemd Service)
+Demo mode uses scripted replies and synthetic tones, so it is useful for checking animation and state transitions, not voice quality.
 
-Create `/etc/systemd/system/portrait.service`:
-```ini
-[Unit]
-Description=Harry Potter Talking Portrait
-After=network.target sound.target
+## Conversation and voice
 
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/talking-portrait
-ExecStart=/usr/bin/python3 /home/pi/talking-portrait/main.py --fullscreen --config portrait_config.json
-Restart=always
-RestartSec=5
-Environment=DISPLAY=:0
+The default `conversation_mode: "auto"` uses Gemini text generation when a key and token budget are available, and falls back to the local llama.cpp server. Both routes, including the greeting, use **the same Piper Ryan voice**. This keeps the voice consistent when the model changes.
 
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start the service:
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable portrait.service
-sudo systemctl start portrait.service
+cp .env.example .env
+# Set GEMINI_API_KEY in .env for optional cloud responses.
 ```
 
----
+| Setting | Behavior |
+| --- | --- |
+| `conversation_mode: "local"` | Local llama.cpp only; no Gemini generation |
+| `gemini_live.response_voice: "piper"` | Default: Gemini text and local text share Piper |
+| `gemini_live.response_voice: "native"` | Optional Gemini Live audio with `voice_name: "Charon"` |
+| `gemini_live.text_model` | Cloud text model; defaults to `gemini-3.5-flash-lite` |
+| `gemini_live.model` | Model used only for optional native Live audio |
 
-## 4. Latency Benchmarks & Turnaround Budget
+Charon is the deeper native voice option selected for this portrait. It will still sound different from Piper. Use the default shared-Piper route when voice consistency matters most. The browser demo uses the operating system's speech voices and prefers a known masculine voice when available.
 
-| Subsystem | Processing Time | Mechanism |
-| :--- | :--- | :--- |
-| **STT (Speech to Text)** | Hardware dependent | faster-whisper `tiny.en` on CPU |
-| **Gemma prompt processing** | ~2.5s – 3.0s | 43-47 tokens on the tested Pi 5 |
-| **Gemma generation** | ~3.4 – 3.7 tok/s | 7-17 tokens with the optimized server |
-| **Piper TTS** | ~1.7s first run, near-zero cached | Ryan medium ONNX voice |
-| **Typical injected-text turn** | **~6s – 11s** | Depends primarily on reply length |
+The cloud text default follows Google's current [model availability guidance](https://ai.google.dev/gemini-api/docs/deprecations): access to Gemini 2.5 is limited to existing users. All model names remain configurable.
 
----
+Token quotas in `gemini_live` are best-effort application limits, **not a hard spending cap or a free-tier guarantee**. One in-flight response can exceed the remaining limit, and failed requests may not report complete usage. Check your provider's account limits separately.
 
-## 5. Troubleshooting & FAQ
+## Responsiveness and graphics
 
-### Web Application Issues
-- **Microphone / Camera permission blocked**: In browser address bar, click the site permissions icon and allow Microphone and Camera.
-- **Port 3000 in use**: Stop any existing instance with `kill $(lsof -t -i:3000)` before restarting `npm run dev`.
-- **Speech recognition not supported in browser**: Chrome and Edge natively support the Web Speech API. For other browsers, typing questions or demo mode works out-of-the-box.
+- Generation, synthesis, and playback run as separate stages with bounded queues. Later phrases can be generated and synthesized while the current phrase plays.
+- Whisper defaults to `tiny.en`, int8, and two CPU threads. Silence after speech ends a phrase after approximately 0.5 seconds; the initial listening window is four seconds.
+- Piper keeps its Python voice loaded, primes the greeting, and caches up to 128 utterances. Missing speech models produce an actionable error instead of silently humming.
+- The portrait defaults to 30 FPS, with cached images, labels, captions, and particles. Camera motion analysis runs at reduced resolution, and hidden camera previews are not copied.
+- Main-thread state transitions reject stale microphone results, recover from failed turns, and wait for playback to finish before reopening the microphone.
 
-### Raspberry Pi 5 Hardware Issues
-- **Hailo device not found (`hailortcli scan` empty)**: Check PCIe ribbon cable orientation, ensure `dtparam=pciex1` is in `/boot/firmware/config.txt`, and reboot.
-- **Microphone not detected**: Run `python tools/diagnose_audio.py` or `python -c "import speech_recognition as sr; print(list(enumerate(sr.Microphone.list_microphone_names())))"` and set `stt.microphone_device_index` or `stt.microphone_name` in `portrait_config.json`.
-- **Microphone is listed but speech never registers**: Run `python tools/diagnose_audio.py --record-test 4`. It records `/tmp/hpport_mic_test.wav`, reports RMS/peak signal levels, and tells you whether the source is silent or merely too quiet. Play the result with `aplay /tmp/hpport_mic_test.wav`.
-- **Only a humming tone plays instead of speech**: Piper was not found or failed, so the app used the synthetic fallback. Verify the Piper binary and Ryan medium model exist under `/mnt/portrait/models/piper/` and watch for `[TTS] Using synthetic fallback audio` in the logs. Empty Gemma replies are now replaced before Piper runs.
-- **Audio playback sounds distorted on Pi speakers**: Keep `tts.playback_sample_rate` at `22050` and `tts.playback_channels` at `1`, since Piper outputs 22.05 kHz mono WAV audio.
-- **llama-server seems up but replies still fail**: First verify it is actually listening with `curl http://127.0.0.1:8080/v1/models`. If that works, increase `llm.timeout_seconds` if the Pi is still prompt-processing when the client disconnects. A cancellation in the llama-server terminal after 10-20 seconds usually means the client timed out.
-- **Gemma takes 30-90 seconds or returns empty text**: Restart it with the optimized command in Step 2. In particular, use `-np 1 -c 512 --reasoning off --reasoning-budget 0`; the app log now reports prompt tokens, output tokens, and generation rate for each reply.
-- **Pygame display errors without desktop GUI**: Use SDL DirectFB/KMSDRM mode by setting `export SDL_VIDEODRIVER=kmsdrm` before launching `main.py`.
+The camera driver detects **motion on the CPU**. It can inspect Hailo SDK availability, but this repository does not currently run Hailo person inference. An AI HAT is optional; do not interpret motion triggers as reliable person recognition.
 
----
+Controls: **Space** wake, **T** test question, **C** camera preview, **H** diagnostics, **Esc/Q** quit. `--fullscreen` applies to both normal and demo runs.
 
-## License & Credits
+## Browser application
 
-- Inspired by the enchanted portraits of the Harry Potter universe.
-- Powered by **Google Gemma 4**, **Hailo AI**, **Rhasspy Piper**, and **Vite + React**.
+Use Node.js 22 or later. The browser frontend does not control the native Python process or use its JSON configuration.
+
+```bash
+npm ci
+npm run dev
+# Open http://localhost:3000
+
+npm run lint
+npm run build
+npm start
+```
+
+`npm start` serves the built application without starting Vite. Microphone support and available voices depend on the browser/OS. Use Chrome or Edge for Web Speech recognition; typed input remains available. Browser microphone/camera access requires localhost or HTTPS. Without a Gemini key the browser returns scripted responses.
+
+## Verification
+
+```bash
+python -m unittest discover -s tests
+npm run lint
+npm run build
+python tools/benchmark_renderer.py --headless
+```
+
+On a headless Linux test machine, set `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy` for Python tests. Run the renderer benchmark without `--headless` on the Pi's actual display for useful deployment measurements.
+
+The desktop headless renderer comparison (1024x768, 300 frames after warmup, diagnostics and camera preview disabled) measured median render work decreasing from **1.671 ms to 0.713 ms**. This excludes the frame-rate sleep and is not a Raspberry Pi benchmark or an end-to-end speech latency claim.
+
+Before deployment, verify on the Pi: microphone phrase boundaries, first response delay with warm/cold models, audible local/cloud switching, speaker output, camera reconnects, and sustained temperature/CPU load. [Architecture](docs/architecture.md) documents the execution model and remaining limits.

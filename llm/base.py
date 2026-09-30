@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
+from llm.streaming import speech_clauses
 
 
 class BaseLLMClient(ABC):
@@ -47,43 +48,6 @@ class BaseLLMClient(ABC):
         system_prompt: Optional[str] = None,
     ):
         """Yield sentence/clause chunks suitable for immediate pipelined TTS synthesis."""
-        buffer = ""
-        for token in self.generate_response_stream(user_message, conversation_history, system_prompt):
-            buffer += token
-
-            # Full sentence endings split immediately
-            split_found = False
-            for mark in (". ", "! ", "? ", "\n"):
-                if mark in buffer:
-                    parts = buffer.split(mark, 1)
-                    clause = (parts[0] + mark).strip()
-                    if clause:
-                        yield clause
-                    buffer = parts[1]
-                    split_found = True
-                    break
-
-            if split_found:
-                continue
-
-            # Comma splits only if accumulated part has at least 3 words
-            if ", " in buffer:
-                parts = buffer.split(", ", 1)
-                first_part = parts[0].strip()
-                if len(first_part.split()) >= 3:
-                    clause = first_part + ","
-                    yield clause
-                    buffer = parts[1]
-                    continue
-
-            # Length-based chunking if no punctuation for 7+ words
-            words = buffer.strip().split()
-            if len(words) >= 7 and buffer.endswith(" "):
-                clause = buffer.strip()
-                if clause:
-                    yield clause
-                buffer = ""
-
-        remainder = buffer.strip()
-        if remainder:
-            yield remainder
+        yield from speech_clauses(
+            self.generate_response_stream(user_message, conversation_history, system_prompt)
+        )

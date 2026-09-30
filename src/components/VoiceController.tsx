@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ConversationConfig, PortraitState } from "../types";
-import { Mic, MicOff, Volume2, Send, Sparkles, AlertCircle } from "lucide-react";
+import { Mic, Send, AlertCircle } from "lucide-react";
 
 interface VoiceControllerProps {
   config: ConversationConfig;
@@ -11,6 +11,7 @@ interface VoiceControllerProps {
   setMouthLevel: (level: number) => void;
   speechTextToSay: string | null;
   onSpeechDone: () => void;
+  onSpeechStart: (delaySeconds: number) => void;
   isDemoMode: boolean;
 }
 
@@ -23,15 +24,21 @@ export const VoiceController: React.FC<VoiceControllerProps> = ({
   setMouthLevel,
   speechTextToSay,
   onSpeechDone,
+  onSpeechStart,
   isDemoMode,
 }) => {
   const [manualText, setManualText] = useState("");
   const [isMicListening, setIsMicListening] = useState(false);
   const [sttSupported, setSttSupported] = useState(true);
-  const recognitionRef = useRef<any>(null);
+  const [micError, setMicError] = useState("");
   const mouthAnimRef = useRef<number | null>(null);
+  const selectedVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
+  const callbacksRef = useRef({ config, state, onWakeWord, onUserInput, onStopPhrase, setMouthLevel, onSpeechDone, onSpeechStart });
+  callbacksRef.current = { config, state, onWakeWord, onUserInput, onStopPhrase, setMouthLevel, onSpeechDone, onSpeechStart };
+  const listeningEnabled = !isDemoMode && (state === PortraitState.IDLE || state === PortraitState.LISTENING);
 
-  // Initialize Web Speech Recognition
+  // A recognition instance owns its restart timer. Cleanup disables its handlers
+  // before abort(), whose asynchronous onend must never restart a stale mic.
   useEffect(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -41,200 +48,229 @@ export const VoiceController: React.FC<VoiceControllerProps> = ({
       return;
     }
 
+    if (!listeningEnabled) return;
+    let disposed = false;
+    let handled = false;
+    let blocked = false;
+    let restartTimer: ReturnType<typeof setTimeout> | undefined;
+    let recognition: any;
     try {
-      const recognition = new SpeechRecognition();
+      recognition = new SpeechRecognition();
+    } catch (error) {
+      console.warn("Could not initialize microphone:", error);
+      setSttSupported(false);
+      return;
+    }
+    const start = () => {
+      if (disposed || handled || blocked) return;
+      try {
+        recognition.start();
+      } catch (error) {
+        console.warn("Could not start microphone:", error);
+      }
+    };
+    try {
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = config.language || "en-US";
 
       recognition.onresult = (event: any) => {
+        if (disposed || handled) return;
+        const current = callbacksRef.current;
         let transcript = "";
+        let finalTranscript = "";
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           transcript += event.results[i][0].transcript;
+          if (event.results[i].isFinal) finalTranscript += event.results[i][0].transcript;
         }
-        transcript = transcript.trim().toLowerCase();
+        const normalized = transcript.trim().toLowerCase();
 
         // 1. Wake word spotting while IDLE
-        if (state === PortraitState.IDLE) {
-          const wakeWord = (config.wake_word || "portrait").toLowerCase();
-          if (transcript.includes(wakeWord)) {
+        if (current.state === PortraitState.IDLE) {
+          const wakeWord = (current.config.wake_word || "portrait").toLowerCase();
+          if (normalized.includes(wakeWord)) {
+            handled = true;
             recognition.abort();
-            onWakeWord();
+            current.onWakeWord();
             return;
           }
         }
 
         // 2. Continuous listening for user utterance while in LISTENING state
-        if (state === PortraitState.LISTENING) {
-          const isFinal = event.results[event.results.length - 1].isFinal;
-          const stopPhrase = (config.stop_phrase || "goodbye portrait").toLowerCase();
+        if (current.state === PortraitState.LISTENING) {
+          const stopPhrase = (current.config.stop_phrase || "goodbye portrait").toLowerCase();
 
-          if (transcript.includes(stopPhrase)) {
+          if (normalized.includes(stopPhrase)) {
+            handled = true;
             recognition.abort();
-            onStopPhrase();
+            current.onStopPhrase();
             return;
           }
 
-          if (isFinal && transcript.length > 0) {
+          if (finalTranscript.trim()) {
+            handled = true;
             recognition.abort();
-            onUserInput(transcript);
+            current.onUserInput(finalTranscript.trim());
           }
         }
       };
 
       recognition.onerror = (err: any) => {
-        if (err.error !== "no-speech") {
+        if (disposed) return;
+        if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(err.error)) {
+          blocked = true;
+          setMicError("Microphone unavailable. Check browser permissions or use the text prompt.");
+        }
+        if (err.error !== "no-speech" && err.error !== "aborted") {
           console.warn("Speech recognition error:", err.error);
         }
       };
 
       recognition.onend = () => {
+        if (disposed) return;
         setIsMicListening(false);
-        // Automatically restart if state is IDLE or LISTENING and not demo mode
-        if (
-          !isDemoMode &&
-          (state === PortraitState.IDLE || state === PortraitState.LISTENING)
-        ) {
-          try {
-            recognition.start();
-            setIsMicListening(true);
-          } catch {
-            // ignore rapid restart error
-          }
+        if (!handled && !blocked) {
+          restartTimer = setTimeout(start, 300);
         }
       };
-
-      recognitionRef.current = recognition;
+      recognition.onstart = () => {
+        if (disposed) return;
+        setMicError("");
+        setIsMicListening(true);
+      };
+      start();
     } catch (e) {
       console.warn("Could not setup SpeechRecognition:", e);
       setSttSupported(false);
     }
 
     return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort();
-        } catch {}
-      }
+      disposed = true;
+      clearTimeout(restartTimer);
+      recognition.onend = null;
+      recognition.onstart = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      try { recognition.abort(); } catch {}
+      setIsMicListening(false);
     };
-  }, [config.language, config.wake_word, config.stop_phrase, state, isDemoMode, onWakeWord, onUserInput, onStopPhrase]);
+  }, [config.language, listeningEnabled]);
 
-  // Manage Speech Recognition Start/Stop based on FSM State
+  // Web Speech has no gender field. Prefer known masculine English voices,
+  // then retain the chosen voice across model and callback changes.
   useEffect(() => {
-    const recognition = recognitionRef.current;
-    if (!recognition || isDemoMode) return;
-
-    if (state === PortraitState.IDLE || state === PortraitState.LISTENING) {
-      try {
-        recognition.start();
-        setIsMicListening(true);
-      } catch (err) {
-        // already started
-      }
-    } else {
-      try {
-        recognition.abort();
-        setIsMicListening(false);
-      } catch (err) {}
-    }
-  }, [state, isDemoMode]);
+    if (!("speechSynthesis" in window)) return;
+    selectedVoiceRef.current = null;
+    const chooseVoice = () => {
+      if (selectedVoiceRef.current) return;
+      const language = (config.language || "en-US").toLowerCase();
+      const voices = window.speechSynthesis.getVoices().filter((voice) =>
+        voice.lang.toLowerCase().startsWith(language.split("-")[0])
+      );
+      const maleName = /\b(male|david|mark|george|daniel|alex|guy|ryan|james|arthur|oliver|thomas|fred|aaron)\b/i;
+      const score = (voice: SpeechSynthesisVoice) =>
+        (maleName.test(voice.name) && !/\bfemale\b/i.test(voice.name) ? 100 : 0) +
+        (voice.lang.toLowerCase() === language ? 10 : 0) + (voice.localService ? 1 : 0);
+      voices.sort((a, b) => score(b) - score(a) || a.voiceURI.localeCompare(b.voiceURI));
+      selectedVoiceRef.current = voices[0] || null;
+    };
+    chooseVoice();
+    window.speechSynthesis.addEventListener("voiceschanged", chooseVoice);
+    return () => window.speechSynthesis.removeEventListener("voiceschanged", chooseVoice);
+  }, [config.language]);
 
   // TTS Speech Synthesis with Real-Time Lip-Sync
   useEffect(() => {
     if (!speechTextToSay) return;
+    let active = true;
+    let finished = false;
+    const finish = () => {
+      if (!active || finished) return;
+      finished = true;
+      if (mouthAnimRef.current !== null) cancelAnimationFrame(mouthAnimRef.current);
+      callbacksRef.current.setMouthLevel(0);
+      callbacksRef.current.onSpeechDone();
+    };
+    const stopAnimation = () => {
+      active = false;
+      if (mouthAnimRef.current !== null) cancelAnimationFrame(mouthAnimRef.current);
+      mouthAnimRef.current = null;
+      callbacksRef.current.setMouthLevel(0);
+    };
 
     if (!("speechSynthesis" in window)) {
       // Fallback mouth animation timer
-      let start = performance.now();
+      const start = performance.now();
       const duration = Math.min(Math.max(speechTextToSay.length * 50, 1800), 5000);
 
       const animMouth = () => {
+        if (!active) return;
         const elapsed = performance.now() - start;
         if (elapsed < duration) {
           const level = Math.abs(Math.sin(elapsed * 0.015)) * 0.8 + Math.random() * 0.2;
-          setMouthLevel(level);
+          callbacksRef.current.setMouthLevel(level);
           mouthAnimRef.current = requestAnimationFrame(animMouth);
         } else {
-          setMouthLevel(0);
-          onSpeechDone();
+          finish();
         }
       };
       mouthAnimRef.current = requestAnimationFrame(animMouth);
-      return;
+      return stopAnimation;
     }
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(speechTextToSay);
-    utterance.lang = config.language || "en-US";
-    utterance.rate = 0.95; // eerie, measured pace
-    utterance.pitch = 0.9;
+    utterance.lang = callbacksRef.current.config.language || "en-US";
+    utterance.rate = 1.0;
+    utterance.pitch = 0.85;
 
-    // Pick an expressive English voice if available
-    const voices = window.speechSynthesis.getVoices();
-    const spookyVoice = voices.find(
-      (v) =>
-        v.lang.startsWith("en") &&
-        (v.name.includes("Male") || v.name.includes("UK") || v.name.includes("Natural") || v.name.includes("Google"))
-    );
-    if (spookyVoice) {
-      utterance.voice = spookyVoice;
-    }
+    if (selectedVoiceRef.current) utterance.voice = selectedVoiceRef.current;
 
     // Lip sync animation loop while speaking
-    let isSpeaking = true;
+    let lastFrame = 0;
     const animateMouth = () => {
-      if (!isSpeaking) return;
+      if (!active || finished) return;
       // Syllable oscillation pattern
       const now = performance.now();
-      const wave = (Math.sin(now * 0.018) + 1) * 0.45;
-      const jitter = Math.random() * 0.15;
-      setMouthLevel(Math.min(1.0, wave + jitter));
+      if (now - lastFrame >= 1000 / 30) {
+        const wave = (Math.sin(now * 0.018) + 1) * 0.45;
+        callbacksRef.current.setMouthLevel(Math.min(1.0, wave + Math.random() * 0.15));
+        lastFrame = now;
+      }
       mouthAnimRef.current = requestAnimationFrame(animateMouth);
     };
 
+    const queuedAt = performance.now();
     utterance.onstart = () => {
-      isSpeaking = true;
+      if (!active) return;
+      callbacksRef.current.onSpeechStart((performance.now() - queuedAt) / 1000);
       mouthAnimRef.current = requestAnimationFrame(animateMouth);
     };
 
-    utterance.onend = () => {
-      isSpeaking = false;
-      if (mouthAnimRef.current) cancelAnimationFrame(mouthAnimRef.current);
-      setMouthLevel(0);
-      onSpeechDone();
-    };
+    utterance.onend = finish;
 
     utterance.onerror = (e) => {
-      console.warn("TTS playback encountered issue, continuing:", e);
-      isSpeaking = false;
-      if (mouthAnimRef.current) cancelAnimationFrame(mouthAnimRef.current);
-      setMouthLevel(0);
-      onSpeechDone();
+      if (!active) return;
+      console.warn("TTS playback encountered issue, continuing:", e.error);
+      finish();
     };
 
     window.speechSynthesis.speak(utterance);
 
     return () => {
+      stopAnimation();
+      utterance.onstart = null;
+      utterance.onend = null;
+      utterance.onerror = null;
       window.speechSynthesis.cancel();
-      if (mouthAnimRef.current) cancelAnimationFrame(mouthAnimRef.current);
-      setMouthLevel(0);
     };
-  }, [speechTextToSay, config.language, setMouthLevel, onSpeechDone]);
+  }, [speechTextToSay]);
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!manualText.trim()) return;
-
-    if (state === PortraitState.IDLE) {
-      onWakeWord();
-      setTimeout(() => {
-        onUserInput(manualText.trim());
-        setManualText("");
-      }, 400);
-    } else {
-      onUserInput(manualText.trim());
-      setManualText("");
-    }
+    if (!manualText.trim() || (state !== PortraitState.IDLE && state !== PortraitState.LISTENING)) return;
+    onUserInput(manualText.trim());
+    setManualText("");
   };
 
   return (
@@ -260,6 +296,7 @@ export const VoiceController: React.FC<VoiceControllerProps> = ({
           <span>Speech Recognition API not supported in this browser; use the text dialogue prompt below.</span>
         </div>
       )}
+      {micError && <p role="status" className="text-xs text-amber-300">{micError}</p>}
 
       {/* Interactive text conversation input */}
       <form onSubmit={handleManualSubmit} className="flex gap-2">
@@ -272,7 +309,7 @@ export const VoiceController: React.FC<VoiceControllerProps> = ({
         />
         <button
           type="submit"
-          disabled={!manualText.trim()}
+          disabled={!manualText.trim() || (state !== PortraitState.IDLE && state !== PortraitState.LISTENING)}
           className="bg-amber-700 hover:bg-amber-600 disabled:opacity-40 disabled:hover:bg-amber-700 text-amber-100 px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
         >
           <Send className="w-4 h-4" />

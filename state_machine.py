@@ -28,7 +28,7 @@ class PortraitStateMachine:
         self.wake_pending_start_time: Optional[float] = None
         self.silence_count = 0
         self.cooldown_start_time: Optional[float] = None
-        self.state_enter_time = time.time()
+        self.state_enter_time = time.monotonic()
 
         # Configuration parameters
         self.wake_confirm_frames = self.config.get("wake_confirm_frames", 3)
@@ -43,7 +43,7 @@ class PortraitStateMachine:
 
         self.previous_state = self.state
         self.state = new_state
-        self.state_enter_time = time.time()
+        self.state_enter_time = time.monotonic()
 
         print(f"[State Machine] Transition: {self.previous_state.value} -> {self.state.value}")
 
@@ -60,7 +60,7 @@ class PortraitStateMachine:
                 self.consecutive_wake_frames += 1
                 if self.consecutive_wake_frames >= self.wake_confirm_frames:
                     self.consecutive_wake_frames = 0
-                    self.wake_pending_start_time = time.time()
+                    self.wake_pending_start_time = time.monotonic()
                     self.transition_to(PortraitState.WAKE_PENDING)
             else:
                 self.consecutive_wake_frames = 0
@@ -73,7 +73,7 @@ class PortraitStateMachine:
                 self.transition_to(PortraitState.GREETING)
             else:
                 # False positive check with timeout
-                if self.wake_pending_start_time and (time.time() - self.wake_pending_start_time > self.wake_confirm_timeout):
+                if self.wake_pending_start_time and (time.monotonic() - self.wake_pending_start_time > self.wake_confirm_timeout):
                     print("[State Machine] Wake confirmation timed out (false trigger). Returning to IDLE.")
                     self.wake_pending_start_time = None
                     self.transition_to(PortraitState.IDLE)
@@ -85,8 +85,9 @@ class PortraitStateMachine:
 
     def on_speech_detected(self) -> None:
         """Called when user starts uttering speech."""
-        if self.state == PortraitState.LISTENING:
+        if self.state in (PortraitState.LISTENING, PortraitState.IDLE, PortraitState.COOLDOWN):
             self.silence_count = 0
+            self.cooldown_start_time = None
             self.transition_to(PortraitState.THINKING)
 
     def on_speech_silence(self) -> None:
@@ -114,12 +115,12 @@ class PortraitStateMachine:
 
     def start_cooldown(self) -> None:
         """Enters cooldown to prevent instant re-triggering."""
-        self.cooldown_start_time = time.time()
+        self.cooldown_start_time = time.monotonic()
         self.transition_to(PortraitState.COOLDOWN)
 
     def update(self) -> None:
         """Periodic tick to evaluate timeouts."""
-        now = time.time()
+        now = time.monotonic()
 
         if self.state == PortraitState.COOLDOWN:
             if self.cooldown_start_time and (now - self.cooldown_start_time >= self.cooldown_duration):

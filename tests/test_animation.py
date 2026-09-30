@@ -2,6 +2,7 @@
 
 import time
 import unittest
+from unittest.mock import patch
 from renderer.animation import BlinkController, SaccadeController, LipSyncEngine, VISEME_NAMES
 from vision.mock import MockVision
 
@@ -16,12 +17,12 @@ class TestAnimationEngine(unittest.TestCase):
 
         # Trigger blink
         controller.is_blinking = True
-        controller.blink_start_time = time.time() - 0.02  # 20ms into 100ms blink -> closing phase
+        controller.blink_start_time = time.monotonic() - 0.02
         controller.update()
         self.assertIn(controller.get_stage(), ("open", "half"))
 
         # Middle of blink (50ms in) -> closed
-        controller.blink_start_time = time.time() - 0.05
+        controller.blink_start_time = time.monotonic() - 0.05
         controller.update()
         self.assertEqual(controller.get_stage(), "closed")
         self.assertGreaterEqual(controller.get_progress(), 0.75)
@@ -29,7 +30,7 @@ class TestAnimationEngine(unittest.TestCase):
     def test_saccade_controller_produces_bounded_jitter(self):
         saccade = SaccadeController(min_interval=0.01, max_interval=0.02, max_jitter_px=3.0)
         # Trigger saccade
-        saccade.next_saccade_time = time.time() - 1.0
+        saccade.next_saccade_time = time.monotonic() - 1.0
         jx, jy = saccade.update()
         self.assertLessEqual(abs(jx), 4.0)
         self.assertLessEqual(abs(jy), 4.0)
@@ -47,6 +48,30 @@ class TestAnimationEngine(unittest.TestCase):
         engine.set_active_viseme("B")
         time.sleep(0.04)
         self.assertGreaterEqual(engine.get_crossfade_alpha(), 0.8)
+
+    def test_saccade_easing_is_independent_of_frame_rate(self):
+        offsets = []
+        for fps in (30, 60):
+            with patch("renderer.animation.time.monotonic", return_value=0.0) as now:
+                saccade = SaccadeController()
+                saccade.target_offset_x = 2.0
+                saccade.next_saccade_time = 10.0
+                saccade.saccade_end_time = 10.0
+                for frame in range(1, fps + 1):
+                    now.return_value = frame / fps
+                    saccade.update()
+                offsets.append(saccade.current_offset_x)
+        self.assertAlmostEqual(*offsets, places=6)
+
+    def test_mock_gaze_moves_without_rendering_preview(self):
+        with patch("vision.mock.time.monotonic", return_value=0.0) as now:
+            vision = MockVision()
+            vision.start()
+            vision.trigger(10.0)
+            initial = vision.get_visitor_gaze()
+            now.return_value = 0.5
+            self.assertNotEqual(initial, vision.get_visitor_gaze())
+            vision.stop()
 
     def test_mock_vision_gaze_tracking(self):
         vision = MockVision()

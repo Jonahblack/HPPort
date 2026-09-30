@@ -3,13 +3,6 @@ import time
 from typing import Dict, Any, Optional, Tuple
 from vision.base import BaseVisionDetector
 
-try:
-    import numpy as np
-    HAS_NUMPY = True
-except ImportError:
-    HAS_NUMPY = False
-
-
 class MockVision(BaseVisionDetector):
     """Simulated person detector controlled via spacebar, API triggers, or timer."""
 
@@ -20,7 +13,9 @@ class MockVision(BaseVisionDetector):
         self._trigger_until = 0.0
         self.cam_width = 320
         self.cam_height = 240
-        self.sim_tick = 0
+        self._start_time = time.monotonic()
+        self._preview_key = None
+        self._preview_surface = None
 
     def start(self) -> None:
         self._running = True
@@ -32,7 +27,7 @@ class MockVision(BaseVisionDetector):
     def is_person_detected(self) -> bool:
         if not self._running:
             return False
-        if time.time() < self._trigger_until:
+        if time.monotonic() < self._trigger_until:
             return True
         return self._detected
 
@@ -43,7 +38,7 @@ class MockVision(BaseVisionDetector):
 
     def trigger(self, duration_seconds: float = 4.0) -> None:
         """Trigger a simulated person arrival event."""
-        self._trigger_until = time.time() + duration_seconds
+        self._trigger_until = time.monotonic() + duration_seconds
         self._confidence = 0.94
         print(f"[Vision] Simulated person arrival triggered for {duration_seconds}s!")
 
@@ -53,40 +48,32 @@ class MockVision(BaseVisionDetector):
 
     def get_latest_frame(self, target_size: Optional[Tuple[int, int]] = None) -> Optional[Any]:
         """Generate animated synthetic radar surface for Pygame preview."""
-        if not HAS_NUMPY:
-            return None
-
-        self.sim_tick += 1
-        w, h = self.cam_width, self.cam_height
-
-        synth_frame = np.zeros((h, w, 3), dtype=np.uint8)
-        synth_frame[:, :] = [14, 22, 28]
-
-        # Optical grid
-        synth_frame[::30, :, :] = [30, 48, 62]
-        synth_frame[:, ::30, :] = [30, 48, 62]
-
+        elapsed = time.monotonic() - self._start_time
         is_present = self.is_person_detected()
-        px = w // 2 + int(np.sin(self.sim_tick * 0.05) * (w // 4 if is_present else 0))
-        py = h // 2
-
-        if is_present:
-            y_indices, x_indices = np.ogrid[:h, :w]
-            dist = np.sqrt((x_indices - px)**2 + (y_indices - py)**2)
-            mask = dist <= 35
-            synth_frame[mask] = [52, 211, 153]
-
-        scan_y = int((self.sim_tick * 3) % h)
-        synth_frame[scan_y : min(h, scan_y + 2), :, :] = [56, 189, 248]
-
+        key = (int(elapsed * 15), target_size, is_present)
+        if key == self._preview_key:
+            return self._preview_surface
         try:
             import pygame  # type: ignore
-            surface = pygame.image.frombuffer(synth_frame.tobytes(), (w, h), "RGB")
+            w, h = target_size or (self.cam_width, self.cam_height)
+            surface = pygame.Surface((w, h))
+            surface.fill((14, 22, 28))
+            spacing = max(10, w // 10)
+            for x in range(0, w, spacing):
+                pygame.draw.line(surface, (30, 48, 62), (x, 0), (x, h))
+            for y in range(0, h, spacing):
+                pygame.draw.line(surface, (30, 48, 62), (0, y), (w, y))
             if is_present:
-                rect = pygame.Rect(px - 28, py - 35, 56, 70)
+                px = w // 2 + int(math.sin(elapsed * 1.5) * w / 4)
+                py = h // 2
+                radius = max(4, w // 10)
+                pygame.draw.circle(surface, (52, 211, 153), (px, py), radius)
+                rect = pygame.Rect(px - radius, py - radius, radius * 2, radius * 2)
                 pygame.draw.rect(surface, (52, 211, 153), rect, width=2)
-            if target_size and (target_size[0] != w or target_size[1] != h):
-                surface = pygame.transform.smoothscale(surface, target_size)
+            scan_y = int(elapsed * 90) % h
+            pygame.draw.line(surface, (56, 189, 248), (0, scan_y), (w, scan_y), 2)
+            self._preview_key = key
+            self._preview_surface = surface
             return surface
         except Exception:
             return None
@@ -103,7 +90,8 @@ class MockVision(BaseVisionDetector):
     def get_visitor_gaze(self) -> Tuple[float, float, float]:
         if not self.is_person_detected():
             return (0.0, 0.0, 1.0)
-        norm_x = float(math.sin(self.sim_tick * 0.05))
-        norm_y = float(0.15 * math.cos(self.sim_tick * 0.03))
-        distance = 1.0 + 0.2 * float(math.sin(self.sim_tick * 0.02))
+        elapsed = time.monotonic() - self._start_time
+        norm_x = math.sin(elapsed * 1.5)
+        norm_y = 0.15 * math.cos(elapsed * 0.9)
+        distance = 1.0 + 0.2 * math.sin(elapsed * 0.6)
         return (norm_x, norm_y, distance)
