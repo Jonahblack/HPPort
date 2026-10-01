@@ -100,7 +100,7 @@ export const CameraTrigger: React.FC<CameraTriggerProps> = ({
                 isTriggered ? "bg-emerald-400 animate-ping" : streamActive ? "bg-amber-400" : "bg-red-400"
               }`}
             />
-            {isTriggered ? "Person Detected" : streamActive ? "Scanning" : "Offline"}
+            {isTriggered ? "Motion Detected" : streamActive ? "Scanning" : "Offline"}
           </span>
 
           <button
@@ -134,7 +134,7 @@ export const CameraTrigger: React.FC<CameraTriggerProps> = ({
         <div className="flex justify-between items-center text-xs">
           <span className="text-stone-400 flex items-center gap-1 text-[11px]">
             <Activity className="w-3 h-3 text-amber-400" />
-            Motion / Person Activity:
+            Motion Activity:
           </span>
           <span className="font-mono text-xs font-bold">
             <span className={isTriggered ? "text-emerald-400" : "text-amber-300"}>
@@ -196,7 +196,7 @@ export const CameraTrigger: React.FC<CameraTriggerProps> = ({
             </div>
           )}
           <div className="absolute bottom-1.5 left-2 text-[10px] bg-black/75 px-1.5 py-0.5 rounded text-stone-300 font-mono">
-            {isTriggered ? "🟢 PERSON DETECTED" : "🟡 SCANNING"} &middot; {deviceInfo ? `${deviceInfo.width}x${deviceInfo.height}` : "640x480"}
+            {isTriggered ? "MOTION DETECTED" : "SCANNING"} &middot; {deviceInfo ? `${deviceInfo.width}x${deviceInfo.height}` : "640x480"}
           </div>
         </div>
       )}
@@ -211,7 +211,7 @@ export const CameraTrigger: React.FC<CameraTriggerProps> = ({
               ? "bg-amber-600 hover:bg-amber-500 text-stone-950 cursor-pointer shadow"
               : "bg-stone-800 text-stone-500 cursor-not-allowed"
           }`}
-          title="Manually simulate seeing a person walk in front of the camera"
+          title="Manually simulate camera motion"
         >
           <Zap className="w-3 h-3 fill-current" />
           Test Wake Sensor

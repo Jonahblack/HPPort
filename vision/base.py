@@ -1,25 +1,25 @@
-"""Abstract base class for vision / optical person detection drivers."""
+"""Abstract base class for optical presence-trigger drivers."""
 
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple, List
 
 
 class BaseVisionDetector(ABC):
-    """Interface for optical detection sensors (Hailo-8L, USB Webcam, Mock)."""
+    """Interface for camera motion and simulated presence triggers."""
 
     @abstractmethod
     def start(self) -> None:
-        """Initialize camera capture and NPU pipeline."""
+        """Initialize the camera or simulated input pipeline."""
         pass
 
     @abstractmethod
     def stop(self) -> None:
-        """Release camera and NPU resources."""
+        """Release input resources."""
         pass
 
     @abstractmethod
     def is_person_detected(self) -> bool:
-        """Poll whether a person is present in the current camera frame."""
+        """Poll the legacy presence flag (currently driven by motion)."""
         pass
 
     @abstractmethod

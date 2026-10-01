@@ -221,7 +221,7 @@ export const CameraCornerFeed: React.FC<CameraCornerFeedProps> = ({
               {isPersonDetected ? (
                 <div className="bg-emerald-950/90 border border-emerald-500 text-emerald-200 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase shadow-lg flex items-center gap-1 animate-pulse">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  PERSON DETECTED ({(motionLevel * 100).toFixed(0)}%)
+                  MOTION DETECTED ({(motionLevel * 100).toFixed(0)}%)
                 </div>
               ) : isIdle ? (
                 <div className="bg-stone-950/80 border border-stone-700 text-amber-300/90 px-2 py-0.5 rounded-full text-[9px] font-mono flex items-center gap-1">

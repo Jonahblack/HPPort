@@ -78,7 +78,8 @@
     "non_speaking_duration": 0.2,
     "phrase_threshold": 0.15,
     "cpu_threads": 2,
-    "allow_online_fallback": false
+    "allow_online_fallback": false,
+    "local_files_only": false
   },
   "tts": {
     "driver": "piper",
@@ -98,7 +99,8 @@
     "runtime": "auto",
     "warmup_enabled": true,
     "synthesis_timeout_seconds": 30.0,
-    "cache_max_entries": 128
+    "cache_max_entries": 128,
+    "allow_synthetic_fallback": false
   },
   "renderer": {
     "window_title": "Harry Potter Talking Portrait (Gemma 4)",

@@ -196,7 +196,7 @@ export function useCameraStream({ config, onTrigger, currentState }: UseCameraSt
 
         ctx.fillStyle = "#34d399";
         ctx.font = "bold 9px monospace";
-        ctx.fillText("PERSON 94%", person.x - 28, person.y - 34);
+        ctx.fillText("FIGURE 94%", person.x - 28, person.y - 34);
       }
 
       // 4. Moving Scan Line
@@ -213,7 +213,7 @@ export function useCameraStream({ config, onTrigger, currentState }: UseCameraSt
       ctx.font = "9px monospace";
       ctx.fillText(`PI5 VIRTUAL OPTICAL RADAR [FPS 20]`, 8, 14);
       ctx.fillStyle = "#94a3b8";
-      ctx.fillText(`FRAME: ${tick} | SENSOR: HAILO-8L EMULATOR`, 8, 26);
+      ctx.fillText(`FRAME: ${tick} | SENSOR: MOTION SIMULATOR`, 8, 26);
 
       simulatedAnimFrameRef.current = requestAnimationFrame(renderSimFrame);
     };
@@ -347,7 +347,7 @@ export function useCameraStream({ config, onTrigger, currentState }: UseCameraSt
       // Fallback seamlessly to the synthetic / simulated optical sensor stream
       addLog(
         "info",
-        `Physical webcam hardware absent (${errMsg}). Activated Pi 5 Virtual Optical Sensor stream for person detection testing.`
+        `Physical webcam hardware absent (${errMsg}). Activated a simulated motion stream for interface testing.`
       );
 
       startSimulatedCamera();
@@ -416,11 +416,11 @@ export function useCameraStream({ config, onTrigger, currentState }: UseCameraSt
           personDetected: isTriggered,
         }));
 
-        // Log transition from NO PERSON -> PERSON DETECTED
+        // Log transition from quiet scene to motion above the threshold.
         if (isTriggered && !lastDetectionStateRef.current) {
           addLog(
             "success",
-            `PERSON DETECTED! Motion/Confidence: ${(normalizedScore * 100).toFixed(0)}% (Threshold: ${(
+            `MOTION DETECTED! Activity: ${(normalizedScore * 100).toFixed(0)}% (Threshold: ${(
               threshold * 100
             ).toFixed(0)}%) - Optical Wake Triggered!`,
             normalizedScore,
@@ -463,7 +463,7 @@ export function useCameraStream({ config, onTrigger, currentState }: UseCameraSt
           }
         }
 
-        // Trigger Wake State if person detected, state is IDLE, and not in cooldown debounce
+        // Trigger wake when motion crosses the threshold while idle.
         if (isTriggered && currentState === PortraitState.IDLE) {
           if (now - triggerDebounceRef.current > 2000) {
             triggerDebounceRef.current = now;

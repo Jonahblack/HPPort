@@ -1,8 +1,7 @@
-"""Token Usage Safeguard and Budget Manager for Gemini Live API.
+"""Best-effort Gemini token accounting and between-turn admission limits.
 
-Tracks bidirectional streaming token consumption against user-defined free tier
-quotas, persists daily history across reboots, and enforces an immediate cutoff
-and fallback to the local offline pipeline when limits are approached or reached.
+Reported usage is persisted across reboots. A request already in flight can
+exceed a configured limit, and failed streams may not report complete usage.
 """
 
 from __future__ import annotations
@@ -18,8 +17,8 @@ from typing import Any, Dict, Optional, Tuple
 class TokenSafeguard:
     """Thread-safe persistent token tracker and quota enforcer."""
 
-    DEFAULT_DAILY_LIMIT = 250_000  # Default safe daily token ceiling
-    DEFAULT_SESSION_LIMIT = 40_000  # Default per-visitor session ceiling
+    DEFAULT_DAILY_LIMIT = 250_000  # Configured application admission limit
+    DEFAULT_SESSION_LIMIT = 40_000  # Configured per-visitor admission limit
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         cfg = config or {}

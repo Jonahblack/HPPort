@@ -22,7 +22,7 @@ This guide describes how to develop and test the **Harry Potter Talking Portrait
 
 3. Install requirements:
    ```bash
-   pip install -r requirements.txt
+   python -m pip install -r requirements.txt
    ```
 
 ## Running in Desktop Demo Mode
@@ -35,7 +35,7 @@ python main.py --demo
 
 ### Desktop Controls in Demo Mode:
 - **`Spacebar`**: Simulates a visitor approaching the portrait (triggers vision detector).
-- **`t`**: Injects sample spoken dialogue to test STT -> Gemma -> Piper -> Mouth Flapping.
+- **`t`**: Injects sample dialogue through the mock model, synthetic demo audio, and mouth animation.
 - **`Esc` or `q`**: Cleanly shuts down the application.
 
 ## Testing with Local llama.cpp (Gemma 4 E2B Instruction)
@@ -66,5 +66,5 @@ If you have `llama-server` installed on your desktop:
 Verify all modular components and state machine transitions:
 
 ```bash
-python -m unittest discover tests
+python -m unittest discover -s tests
 ```
