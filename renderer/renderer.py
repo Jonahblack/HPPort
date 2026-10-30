@@ -8,7 +8,7 @@ from collections import OrderedDict
 import pygame
 from typing import Dict, Any, Optional, Tuple
 from state_machine import PortraitState
-from renderer.animation import BlinkController, LipSyncEngine, SaccadeController, VISEME_NAMES
+from renderer.animation import BlinkController, LipSyncEngine, SaccadeController, TransitionSequencePlayer, IdleActivityController, VISEME_NAMES
 
 
 class PortraitRenderer:
@@ -90,7 +90,10 @@ class PortraitRenderer:
         # Sprites dictionary
         self.sprites: Dict[str, Optional[pygame.Surface]] = {}
         self._scaled_sprite_cache: Dict[Tuple[str, int, int], pygame.Surface] = {}
+        self.transition_player = TransitionSequencePlayer(fps=self.fps)
+        self.idle_controller = IdleActivityController()
         self._load_sprites()
+        self._load_transitions()
 
         particle_rng = random.Random(1492)
         self.magic_motes = [
@@ -145,12 +148,15 @@ class PortraitRenderer:
             filenames = {
                 "background": ["background.png", "castle_background.png", "bg.png"],
                 "torso": ["torso.png", "body.png"],
-                "base": ["forest_warrior_neutral.png", "base.png"],
-                "eyes_half": ["forest_warrior_blink_half.png", "eyes_half.png"],
-                "eyes_closed": ["forest_warrior_blink.png", "eyes_closed.png"],
-                "mouth_1": ["forest_warrior_neutral.png", "mouth_1.png"],
-                "mouth_2": ["forest_warrior_mouth_2.png", "mouth_2.png"],
-                "mouth_3": ["forest_warrior_mouth_3.png", "mouth_3.png"],
+                "base": ["wilhelm_reading.png", "base.png", "forest_warrior_neutral.png"],
+                "speaking_base": ["wilhelm_desk_speaking_neutral.png", "end_conversation.png", "base.png"],
+                "wilhelm_reading": ["wilhelm_reading.png", "A01_reading.png"],
+                "wilhelm_tinker": ["wilhelm_tinker.jpeg", "tinker_box.jpeg"],
+                "eyes_half": ["wilhelm_desk_eyes_half.png", "forest_warrior_blink_half.png", "eyes_half.png"],
+                "eyes_closed": ["wilhelm_desk_eyes_closed.png", "forest_warrior_blink.png", "eyes_closed.png"],
+                "mouth_1": ["wilhelm_desk_mouth_1.png", "wilhelm_desk_speaking_neutral.png", "mouth_1.png"],
+                "mouth_2": ["wilhelm_desk_mouth_2.png", "forest_warrior_mouth_2.png", "mouth_2.png"],
+                "mouth_3": ["wilhelm_desk_mouth_3.png", "forest_warrior_mouth_3.png", "mouth_3.png"],
             }
         else:
             filenames = {
@@ -176,8 +182,11 @@ class PortraitRenderer:
         configured_files = self.config.get("sprite_files", {})
         if isinstance(configured_files, dict):
             for key, filename in configured_files.items():
-                if key in filenames and isinstance(filename, str) and filename:
-                    filenames[key].insert(0, filename)
+                if isinstance(filename, str) and filename:
+                    if key in filenames:
+                        filenames[key].insert(0, filename)
+                    else:
+                        filenames[key] = [filename]
 
         loaded_paths = {}
         for key, candidates in filenames.items():
@@ -201,6 +210,31 @@ class PortraitRenderer:
                         print(f"[Renderer] Failed to load {path}: {e}")
             if not loaded:
                 self.sprites[key] = None
+
+    def _load_transitions(self) -> None:
+        """Preload transition frame sequences into RAM surfaces for 0% CPU decoding."""
+        transition_defs = self.config.get("transitions", {
+            "look_up": "transitions/look_up_frames",
+            "return_to_book": "transitions/return_to_book_frames",
+        })
+        if not isinstance(transition_defs, dict):
+            return
+
+        for trans_id, rel_dir in transition_defs.items():
+            dir_path = os.path.join(self.assets_dir, rel_dir)
+            if os.path.isdir(dir_path):
+                frames = []
+                frame_files = [f for f in os.listdir(dir_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+                for fname in sorted(frame_files):
+                    fpath = os.path.join(dir_path, fname)
+                    try:
+                        surf = pygame.image.load(fpath).convert()
+                        frames.append(surf)
+                    except Exception as e:
+                        print(f"[Renderer] Error loading frame {fpath}: {e}")
+                if frames:
+                    self.transition_player.register_sequence(trans_id, frames)
+                    print(f"[Renderer] Registered transition '{trans_id}' with {len(frames)} frames from {dir_path}")
 
     def _scaled_sprite(self, key: str, sprite: pygame.Surface, size: Tuple[int, int]) -> pygame.Surface:
         cache_key = (key, size[0], size[1])
@@ -293,7 +327,12 @@ class PortraitRenderer:
             self.screen.blit(mote, (canvas_rect.x + x - extent, canvas_rect.y + y - extent))
 
     def set_state(self, state: PortraitState) -> None:
+        prev = self.current_state
         self.current_state = state
+        if state == PortraitState.GREETING and self.transition_player.has_sequence("look_up"):
+            self.transition_player.play("look_up")
+        elif state == PortraitState.COOLDOWN and self.transition_player.has_sequence("return_to_book"):
+            self.transition_player.play("return_to_book")
 
     def set_audio_amplitude(self, amplitude: float) -> None:
         self.audio_amplitude = max(0.0, min(1.0, amplitude))
@@ -544,7 +583,27 @@ class PortraitRenderer:
             scaled_bg = self._scaled_sprite("background", bg_sprite, bg_size)
             self.screen.blit(scaled_bg, (bg_dest_x, bg_dest_y))
 
-        if base_sprite is not None and self.asset_mode == "full_frames":
+        if self.transition_player.is_playing:
+            trans_frame = self.transition_player.update()
+            if trans_frame is not None:
+                bw, bh = trans_frame.get_size()
+                scale = max(canvas_rect.width / bw, canvas_rect.height / bh)
+                target_size = (int(bw * scale), int(bh * scale))
+                dest_x = canvas_rect.centerx - target_size[0] // 2
+                dest_y = canvas_rect.centery - target_size[1] // 2
+                scaled_trans = pygame.transform.smoothscale(trans_frame, target_size)
+                self.screen.blit(scaled_trans, (dest_x, dest_y))
+                self._draw_magic_motes(canvas_rect)
+        elif base_sprite is not None and self.asset_mode == "full_frames":
+            # Select active base frame based on state (Desk View):
+            # IDLE / WAKE_PENDING -> reading / tinker idle frame
+            # GREETING / LISTENING / THINKING / SPEAKING / COOLDOWN -> speaking frame
+            if self.current_state in (PortraitState.IDLE, PortraitState.WAKE_PENDING):
+                active_idle = self.sprites.get(self.idle_controller.current_activity) or                               self.sprites.get("wilhelm_reading") or                               base_sprite
+                state_base = active_idle
+            else:
+                state_base = self.sprites.get("speaking_base") or                              self.sprites.get("wilhelm_desk_speaking_neutral") or                              base_sprite
+
             if blink_stage == "closed" and eyes_closed_sprite is not None:
                 frame_key = "eyes_closed"
             elif blink_stage == "half" and eyes_half_sprite is not None:
@@ -556,7 +615,8 @@ class PortraitRenderer:
             else:
                 frame_key = "base"
 
-            frame_sprite = self.sprites.get(frame_key) or base_sprite
+            frame_sprite = self.sprites.get(frame_key) if frame_key != "base" else state_base
+            frame_sprite = frame_sprite or state_base
             bw, bh = frame_sprite.get_size()
             overscan = 1.025 if self.camera_motion else 1.0
             scale = max(canvas_rect.width / bw, canvas_rect.height / bh) * overscan
@@ -566,7 +626,7 @@ class PortraitRenderer:
             dest_x = canvas_rect.centerx - target_size[0] // 2 + int(drift_x)
             dest_y = canvas_rect.centery - target_size[1] // 2 + int(drift_y)
 
-            scaled_frame = self._scaled_sprite(frame_key, frame_sprite, target_size)
+            scaled_frame = self._scaled_sprite(frame_key if frame_key != "base" else str(id(state_base)), frame_sprite, target_size)
             self.screen.blit(scaled_frame, (dest_x, dest_y))
             self._draw_magic_motes(canvas_rect)
         elif base_sprite is not None:

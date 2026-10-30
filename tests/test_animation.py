@@ -1,9 +1,16 @@
-"""Unit tests for the upgraded animation engine (Visemes, Blinking, Saccades)."""
+"""Unit tests for the upgraded animation engine (Visemes, Blinking, Saccades, Transitions, Idle)."""
 
 import time
 import unittest
 from unittest.mock import patch
-from renderer.animation import BlinkController, SaccadeController, LipSyncEngine, VISEME_NAMES
+from renderer.animation import (
+    BlinkController,
+    SaccadeController,
+    LipSyncEngine,
+    TransitionSequencePlayer,
+    IdleActivityController,
+    VISEME_NAMES,
+)
 from vision.mock import MockVision
 
 
@@ -90,6 +97,51 @@ class TestAnimationEngine(unittest.TestCase):
         self.assertLessEqual(gx, 1.0)
         self.assertGreater(gdist, 0.0)
         vision.stop()
+
+    def test_transition_sequence_player_lifecycle(self):
+        player = TransitionSequencePlayer(fps=30.0)
+        frames = ["frame_0", "frame_1", "frame_2", "frame_3"]
+        player.register_sequence("look_up", frames)
+        self.assertTrue(player.has_sequence("look_up"))
+        self.assertFalse(player.has_sequence("nonexistent"))
+
+        completed = []
+        def on_done():
+            completed.append(True)
+
+        player.play("look_up", on_complete=on_done)
+        self.assertTrue(player.is_playing)
+        self.assertEqual(player.active_sequence_id, "look_up")
+
+        # Advance frames
+        with patch("renderer.animation.time.monotonic") as mock_time:
+            mock_time.return_value = player.start_time + 0.05
+            frame = player.update()
+            self.assertIsNotNone(frame)
+            self.assertGreaterEqual(player.get_progress(), 0.0)
+
+            # Advance to end
+            mock_time.return_value = player.start_time + 1.0
+            last_frame = player.update()
+            self.assertEqual(last_frame, "frame_3")
+            self.assertFalse(player.is_playing)
+            self.assertEqual(len(completed), 1)
+
+    def test_idle_activity_controller(self):
+        controller = IdleActivityController(default_activity="reading")
+        self.assertEqual(controller.current_activity, "reading")
+        controller.set_activity("tinkering")
+        self.assertEqual(controller.current_activity, "tinkering")
+
+        # Register custom activity
+        controller.register_activity("brewing", "wilhelm_potion", ["stir_pot", "taste"])
+        controller.set_activity("brewing")
+        self.assertEqual(controller.current_activity, "brewing")
+
+        # Trigger periodic action
+        controller._next_action_time = time.monotonic() - 1.0
+        action = controller.update()
+        self.assertIn(action, ["stir_pot", "taste"])
 
 
 if __name__ == "__main__":

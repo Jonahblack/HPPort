@@ -10,11 +10,12 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 import pygame
 
 from renderer.renderer import PortraitRenderer
+from state_machine import PortraitState
 
 
 class TestPortraitRenderer(unittest.TestCase):
     def setUp(self):
-        with patch.object(PortraitRenderer, "_load_sprites"):
+        with patch.object(PortraitRenderer, "_load_sprites"), patch.object(PortraitRenderer, "_load_transitions"):
             self.renderer = PortraitRenderer({"renderer": {
                 "width": 640, "height": 480, "asset_mode": "full_frames",
                 "ambient_motes": False, "camera_motion": False,
@@ -23,6 +24,22 @@ class TestPortraitRenderer(unittest.TestCase):
 
     def tearDown(self):
         self.renderer.cleanup()
+
+    def test_transition_trigger_on_state_change(self):
+        frame = pygame.Surface((64, 64))
+        frame.fill((100, 150, 200))
+        self.renderer.transition_player.register_sequence("look_up", [frame])
+        self.renderer.transition_player.register_sequence("return_to_book", [frame])
+
+        # Greeting triggers look_up transition
+        self.renderer.set_state(PortraitState.GREETING)
+        self.assertTrue(self.renderer.transition_player.is_playing)
+        self.assertEqual(self.renderer.transition_player.active_sequence_id, "look_up")
+
+        # Cooldown triggers return_to_book transition
+        self.renderer.set_state(PortraitState.COOLDOWN)
+        self.assertTrue(self.renderer.transition_player.is_playing)
+        self.assertEqual(self.renderer.transition_player.active_sequence_id, "return_to_book")
 
     def test_gaze_target_clamping_and_updating(self):
         self.renderer.set_gaze_target(0.75, -0.5, distance=1.4)

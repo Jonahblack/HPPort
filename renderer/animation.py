@@ -5,7 +5,7 @@ import os
 import random
 import time
 import wave
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, Callable
 
 try:
     import numpy as np
@@ -334,3 +334,150 @@ class LipSyncEngine:
             if cue.get("start", 0.0) <= time_sec <= cue.get("end", 0.0):
                 return str(cue.get("value", "X")).upper()
         return "X"
+
+
+class TransitionSequencePlayer:
+    """Manages high-performance playback of pre-decoded transition frame sequences in Pygame.
+
+    Designed for zero CPU video decoding overhead on Raspberry Pi 5.
+    Operates frame-paced according to renderer FPS with completion callbacks.
+    """
+
+    def __init__(self, fps: float = 30.0):
+        self.fps = max(1.0, float(fps))
+        self.active_sequence_id: Optional[str] = None
+        self.frames: List[Any] = []
+        self.is_playing: bool = False
+        self.current_frame_index: int = 0
+        self.start_time: float = 0.0
+        self.on_complete: Optional[Callable[[], None]] = None
+        self.sequences: Dict[str, List[Any]] = {}
+
+    def register_sequence(self, sequence_id: str, frames: List[Any]) -> None:
+        """Register a pre-decoded sequence of frame surfaces under a key."""
+        if frames:
+            self.sequences[sequence_id] = frames
+
+    def has_sequence(self, sequence_id: str) -> bool:
+        return sequence_id in self.sequences and len(self.sequences[sequence_id]) > 0
+
+    def play(
+        self,
+        sequence_id: str,
+        on_complete: Optional[Callable[[], None]] = None,
+        restart: bool = True,
+    ) -> bool:
+        """Begin playing a registered transition sequence."""
+        seq = self.sequences.get(sequence_id)
+        if not seq:
+            if on_complete:
+                try:
+                    on_complete()
+                except Exception as exc:
+                    print(f"[TransitionSequencePlayer] Error in callback: {exc}")
+            return False
+
+        if self.is_playing and self.active_sequence_id == sequence_id and not restart:
+            return True
+
+        self.active_sequence_id = sequence_id
+        self.frames = seq
+        self.is_playing = True
+        self.current_frame_index = 0
+        self.start_time = time.monotonic()
+        self.on_complete = on_complete
+        return True
+
+    def update(self) -> Optional[Any]:
+        """Call once per render tick. Returns the active frame surface or None."""
+        if not self.is_playing or not self.frames:
+            return None
+
+        elapsed = time.monotonic() - self.start_time
+        target_frame = int(elapsed * self.fps)
+
+        if target_frame >= len(self.frames):
+            self.is_playing = False
+            self.current_frame_index = len(self.frames) - 1
+            cb = self.on_complete
+            self.on_complete = None
+            if cb:
+                try:
+                    cb()
+                except Exception as exc:
+                    print(f"[TransitionSequencePlayer] Error in on_complete: {exc}")
+            return self.frames[-1]
+
+        self.current_frame_index = target_frame
+        return self.frames[self.current_frame_index]
+
+    def get_current_frame(self) -> Optional[Any]:
+        if self.frames and 0 <= self.current_frame_index < len(self.frames):
+            return self.frames[self.current_frame_index]
+        return None
+
+    def stop(self) -> None:
+        self.is_playing = False
+        self.on_complete = None
+
+    def get_progress(self) -> float:
+        if not self.frames or not self.is_playing:
+            return 1.0 if not self.is_playing else 0.0
+        return min(1.0, max(0.0, self.current_frame_index / max(1, len(self.frames) - 1)))
+
+
+class IdleActivityController:
+    """Manages Wilhelm's autonomous daily activities and periodic gestures when idle."""
+
+    def __init__(
+        self,
+        default_activity: str = "reading",
+        action_interval_min: float = 25.0,
+        action_interval_max: float = 50.0,
+    ):
+        self.current_activity = default_activity
+        self.action_interval_min = action_interval_min
+        self.action_interval_max = action_interval_max
+        self._last_action_time = time.monotonic()
+        self._next_action_time = self._last_action_time + random.uniform(
+            self.action_interval_min, self.action_interval_max
+        )
+        self.pending_idle_action: Optional[str] = None
+        self.activities: Dict[str, Dict[str, Any]] = {
+            "reading": {
+                "base_sprite": "wilhelm_reading",
+                "periodic_actions": ["page_flip"],
+            },
+            "tinkering": {
+                "base_sprite": "wilhelm_tinker",
+                "periodic_actions": ["tinker_box_study"],
+            },
+        }
+
+    def register_activity(self, name: str, base_sprite: str, periodic_actions: List[str]) -> None:
+        self.activities[name] = {
+            "base_sprite": base_sprite,
+            "periodic_actions": periodic_actions,
+        }
+
+    def update(self) -> Optional[str]:
+        now = time.monotonic()
+        if now >= self._next_action_time:
+            self._last_action_time = now
+            self._next_action_time = now + random.uniform(
+                self.action_interval_min, self.action_interval_max
+            )
+            act_info = self.activities.get(self.current_activity)
+            if act_info and act_info.get("periodic_actions"):
+                action = random.choice(act_info["periodic_actions"])
+                self.pending_idle_action = action
+                return action
+        return None
+
+    def set_activity(self, activity_name: str) -> None:
+        if activity_name in self.activities:
+            self.current_activity = activity_name
+            self._last_action_time = time.monotonic()
+            self._next_action_time = self._last_action_time + random.uniform(
+                self.action_interval_min, self.action_interval_max
+            )

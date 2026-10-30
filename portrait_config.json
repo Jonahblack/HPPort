@@ -103,7 +103,7 @@
     "allow_synthetic_fallback": false
   },
   "renderer": {
-    "window_title": "Harry Potter Talking Portrait (Gemma 4)",
+    "window_title": "Harry Potter Talking Portrait (Wilhelm)",
     "width": 1024,
     "height": 768,
     "fullscreen": false,
@@ -111,11 +111,16 @@
     "assets_dir": "assets",
     "asset_mode": "full_frames",
     "sprite_files": {
-      "base": "forest_warrior_neutral.png",
-      "eyes_closed": "forest_warrior_blink.png",
-      "mouth_1": "forest_warrior_neutral.png",
-      "mouth_2": "forest_warrior_mouth_2.png",
-      "mouth_3": "forest_warrior_mouth_3.png"
+      "base": "wilhelm_reading.png",
+      "speaking_base": "wilhelm_desk_speaking_neutral.png",
+      "wilhelm_reading": "wilhelm_reading.png",
+      "wilhelm_desk_speaking_neutral": "wilhelm_desk_speaking_neutral.png",
+      "wilhelm_tinker": "wilhelm_tinker.jpeg",
+      "eyes_closed": "wilhelm_desk_eyes_closed.png",
+      "eyes_half": "wilhelm_desk_eyes_half.png",
+      "mouth_1": "wilhelm_desk_speaking_neutral.png",
+      "mouth_2": "wilhelm_desk_mouth_2.png",
+      "mouth_3": "wilhelm_desk_mouth_3.png"
     },
     "camera_motion": true,
     "ambient_motes": true,
@@ -132,7 +137,16 @@
     "amplitude_threshold_mouth_2": 0.15,
     "amplitude_threshold_mouth_3": 0.45,
     "show_debug_hud": false,
-    "show_camera_pip": false
+    "show_camera_pip": false,
+    "transitions": {
+      "look_up": "transitions/look_up_frames",
+      "return_to_book": "transitions/return_to_book_frames"
+    },
+    "desk_view": {
+      "enabled": true,
+      "face_rel_x": 0.5756,
+      "face_rel_y": 0.3333
+    }
   },
   "logging": {
     "log_level": "INFO",
