@@ -337,37 +337,89 @@ class LipSyncEngine:
 
 
 class TransitionSequencePlayer:
-    """Manages high-performance playback of pre-decoded transition frame sequences in Pygame.
+    """Manages high-performance playback of pre-decoded transition & animation frame sequences in Pygame.
 
     Designed for zero CPU video decoding overhead on Raspberry Pi 5.
-    Operates frame-paced according to renderer FPS with completion callbacks.
+    Features:
+    - Smooth cadence pacing (native 24 fps) without frame dropping.
+    - Viewport pre-scaling cache so smoothscale is NEVER called per-frame during render.
+    - Multi-frame alpha cross-dissolve at both in-point and out-point for seamless visual handoffs.
+    - Transition locking to prevent thrashing between states.
+    - On-demand loading for idle animation frame directories.
     """
 
-    def __init__(self, fps: float = 30.0):
+    def __init__(self, fps: float = 24.0, crossfade_frames: int = 6):
         self.fps = max(1.0, float(fps))
+        self.crossfade_frames = max(0, int(crossfade_frames))
         self.active_sequence_id: Optional[str] = None
         self.frames: List[Any] = []
         self.is_playing: bool = False
+        self.is_locked: bool = False
         self.current_frame_index: int = 0
         self.start_time: float = 0.0
         self.on_complete: Optional[Callable[[], None]] = None
-        self.sequences: Dict[str, List[Any]] = {}
+        self.sequences: Dict[str, Any] = {}
+        self.sequence_metadata: Dict[str, Dict[str, Any]] = {}
+        # Viewport scaled cache: (sequence_id, width, height) -> List[pygame.Surface]
+        self._scaled_cache: Dict[Tuple[str, int, int], List[Any]] = {}
+        self.outgoing_surface: Optional[Any] = None
+        self.incoming_surface: Optional[Any] = None
 
-    def register_sequence(self, sequence_id: str, frames: List[Any]) -> None:
-        """Register a pre-decoded sequence of frame surfaces under a key."""
+    def register_sequence(
+        self,
+        sequence_id: str,
+        frames_or_dir: Any,
+        label: str = "",
+        fps: Optional[float] = None,
+    ) -> None:
+        """Register a pre-decoded sequence of frame surfaces or directory path."""
+        self.sequences[sequence_id] = frames_or_dir
+        self.sequence_metadata[sequence_id] = {
+            "label": label or sequence_id.replace("_", " ").title(),
+            "fps": fps or self.fps,
+        }
+
+    def load_from_directory(
+        self,
+        sequence_id: str,
+        directory_path: str,
+        fps: Optional[float] = None,
+        label: str = "",
+    ) -> int:
+        """Eagerly pre-load frames from directory into pygame surfaces."""
+        import pygame
+        if not os.path.isdir(directory_path):
+            return 0
+        frame_files = [f for f in os.listdir(directory_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+        frames = []
+        for f in sorted(frame_files):
+            try:
+                surf = pygame.image.load(os.path.join(directory_path, f)).convert()
+                frames.append(surf)
+            except Exception as e:
+                print(f"[TransitionSequencePlayer] Error loading frame {f}: {e}")
         if frames:
-            self.sequences[sequence_id] = frames
+            self.register_sequence(sequence_id, frames, label=label, fps=fps)
+            print(f"[TransitionSequencePlayer] Loaded '{sequence_id}' with {len(frames)} frames from {directory_path}")
+        return len(frames)
 
     def has_sequence(self, sequence_id: str) -> bool:
-        return sequence_id in self.sequences and len(self.sequences[sequence_id]) > 0
+        return sequence_id in self.sequences
 
     def play(
         self,
         sequence_id: str,
         on_complete: Optional[Callable[[], None]] = None,
         restart: bool = True,
+        lock: bool = False,
+        outgoing_surface: Optional[Any] = None,
+        incoming_surface: Optional[Any] = None,
+        crossfade_frames: int = 6,
     ) -> bool:
         """Begin playing a registered transition sequence."""
+        if self.is_locked and not restart:
+            return False
+
         seq = self.sequences.get(sequence_id)
         if not seq:
             if on_complete:
@@ -377,27 +429,73 @@ class TransitionSequencePlayer:
                     print(f"[TransitionSequencePlayer] Error in callback: {exc}")
             return False
 
+        # Load frames if registered as directory path
+        if isinstance(seq, str) and os.path.isdir(seq):
+            try:
+                import pygame
+                frame_files = [f for f in os.listdir(seq) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
+                loaded = [pygame.image.load(os.path.join(seq, f)).convert() for f in sorted(frame_files)]
+                if loaded:
+                    self.sequences[sequence_id] = loaded
+                    seq = loaded
+                else:
+                    return False
+            except Exception as exc:
+                print(f"[TransitionSequencePlayer] Error loading sequence '{sequence_id}': {exc}")
+                return False
+
         if self.is_playing and self.active_sequence_id == sequence_id and not restart:
             return True
 
         self.active_sequence_id = sequence_id
         self.frames = seq
         self.is_playing = True
+        self.is_locked = lock
         self.current_frame_index = 0
-        self.start_time = time.monotonic()
+        now = time.monotonic()
+        self.start_time = now
         self.on_complete = on_complete
+        self.outgoing_surface = outgoing_surface
+        self.incoming_surface = incoming_surface
+        self.crossfade_frames = crossfade_frames
         return True
 
-    def update(self) -> Optional[Any]:
+    def get_scaled_frames(self, target_size: Tuple[int, int]) -> List[Any]:
+        """Retrieve or create viewport-scaled surfaces for active sequence."""
+        if not self.active_sequence_id or not self.frames:
+            return self.frames
+
+        cache_key = (self.active_sequence_id, target_size[0], target_size[1])
+        scaled = self._scaled_cache.get(cache_key)
+        if scaled is None:
+            import pygame
+            if self.frames and hasattr(self.frames[0], "get_size") and self.frames[0].get_size() == target_size:
+                scaled = self.frames
+            else:
+                scaled = []
+                for f in self.frames:
+                    if hasattr(f, "get_size"):
+                        scaled.append(pygame.transform.smoothscale(f, target_size))
+                    else:
+                        scaled.append(f)
+            self._scaled_cache[cache_key] = scaled
+            if len(self._scaled_cache) > 4:
+                oldest = next(iter(self._scaled_cache))
+                del self._scaled_cache[oldest]
+        return scaled
+
+    def update(self, target_size: Optional[Tuple[int, int]] = None) -> Optional[Any]:
         """Call once per render tick. Returns the active frame surface or None."""
         if not self.is_playing or not self.frames:
             return None
 
+        seq_fps = self.sequence_metadata.get(self.active_sequence_id, {}).get("fps", self.fps)
         elapsed = time.monotonic() - self.start_time
-        target_frame = int(elapsed * self.fps)
+        target_frame = int(elapsed * seq_fps)
 
         if target_frame >= len(self.frames):
             self.is_playing = False
+            self.is_locked = False
             self.current_frame_index = len(self.frames) - 1
             cb = self.on_complete
             self.on_complete = None
@@ -406,10 +504,48 @@ class TransitionSequencePlayer:
                     cb()
                 except Exception as exc:
                     print(f"[TransitionSequencePlayer] Error in on_complete: {exc}")
-            return self.frames[-1]
+            active_list = self.get_scaled_frames(target_size) if target_size else self.frames
+            return active_list[-1]
 
         self.current_frame_index = target_frame
-        return self.frames[self.current_frame_index]
+        active_list = self.get_scaled_frames(target_size) if target_size else self.frames
+        current_surf = active_list[self.current_frame_index]
+
+        # Apply smooth alpha crossfade at in-point and out-point if surfaces provided
+        if self.crossfade_frames > 0 and len(self.frames) > self.crossfade_frames * 2:
+            import pygame
+            # In-point crossfade: blend outgoing_surface -> transition sequence
+            if self.current_frame_index < self.crossfade_frames and self.outgoing_surface is not None:
+                alpha = self.current_frame_index / float(self.crossfade_frames)
+                try:
+                    out_scaled = self.outgoing_surface
+                    if target_size and hasattr(out_scaled, "get_size") and out_scaled.get_size() != target_size:
+                        out_scaled = pygame.transform.smoothscale(out_scaled, target_size)
+                    blended = out_scaled.copy()
+                    top = current_surf.copy()
+                    top.set_alpha(int(alpha * 255))
+                    blended.blit(top, (0, 0))
+                    return blended
+                except Exception:
+                    pass
+
+            # Out-point crossfade: blend transition sequence -> incoming_surface
+            remaining = len(self.frames) - 1 - self.current_frame_index
+            if remaining < self.crossfade_frames and self.incoming_surface is not None:
+                alpha = remaining / float(self.crossfade_frames)
+                try:
+                    in_scaled = self.incoming_surface
+                    if target_size and hasattr(in_scaled, "get_size") and in_scaled.get_size() != target_size:
+                        in_scaled = pygame.transform.smoothscale(in_scaled, target_size)
+                    blended = in_scaled.copy()
+                    top = current_surf.copy()
+                    top.set_alpha(int(alpha * 255))
+                    blended.blit(top, (0, 0))
+                    return blended
+                except Exception:
+                    pass
+
+        return current_surf
 
     def get_current_frame(self) -> Optional[Any]:
         if self.frames and 0 <= self.current_frame_index < len(self.frames):
@@ -418,6 +554,7 @@ class TransitionSequencePlayer:
 
     def stop(self) -> None:
         self.is_playing = False
+        self.is_locked = False
         self.on_complete = None
 
     def get_progress(self) -> float:

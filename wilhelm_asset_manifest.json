@@ -31,7 +31,8 @@
       "target_file": "idles/page_flip.mp4",
       "frames_dir": "idles/page_flip_frames",
       "loop": true,
-      "description": "Autonomous reading idle: turns a page"
+      "description": "Autonomous reading idle: turns a page",
+      "extract_frames": true
     },
     {
       "id": "tinker_box_study",
@@ -39,7 +40,8 @@
       "target_file": "idles/tinker_box_study.mp4",
       "frames_dir": "idles/tinker_study_frames",
       "loop": true,
-      "description": "Autonomous tinkering idle: examines enchanted artifact"
+      "description": "Autonomous tinkering idle: examines enchanted artifact",
+      "extract_frames": true
     },
     {
       "id": "get_out_book",
@@ -47,7 +49,8 @@
       "target_file": "idles/get_out_book.mp4",
       "frames_dir": "idles/get_out_book_frames",
       "loop": false,
-      "description": "Activity bridge: sets aside tinker box and gets out book"
+      "description": "Activity bridge: sets aside tinker box and gets out book",
+      "extract_frames": true
     }
   ],
   "stills": [

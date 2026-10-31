@@ -29,6 +29,7 @@ class PortraitStateMachine:
         self.silence_count = 0
         self.cooldown_start_time: Optional[float] = None
         self.state_enter_time = time.monotonic()
+        self._cooldown_presence_latched = False
 
         # Configuration parameters
         self.wake_confirm_frames = self.config.get("wake_confirm_frames", 3)
@@ -55,6 +56,20 @@ class PortraitStateMachine:
 
     def on_person_frame(self, detected: bool) -> None:
         """Process an optical frame detection event."""
+        # While in COOLDOWN, presence is latched to prevent re-waking immediately upon exit
+        if self.state == PortraitState.COOLDOWN:
+            if detected:
+                self._cooldown_presence_latched = True
+            return
+
+        # If presence was latched during/entering cooldown, require visitor to step away before waking again
+        if self._cooldown_presence_latched:
+            if not detected:
+                self._cooldown_presence_latched = False
+                print("[State Machine] Lingering visitor left field of view; presence unlatched.")
+            else:
+                return
+
         if self.state == PortraitState.IDLE:
             if detected:
                 self.consecutive_wake_frames += 1
@@ -115,6 +130,7 @@ class PortraitStateMachine:
 
     def start_cooldown(self) -> None:
         """Enters cooldown to prevent instant re-triggering."""
+        self._cooldown_presence_latched = True
         self.cooldown_start_time = time.monotonic()
         self.transition_to(PortraitState.COOLDOWN)
 

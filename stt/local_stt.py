@@ -44,9 +44,9 @@ class LocalSTT(BaseSTT):
         self.energy_threshold = int(stt_cfg.get("energy_threshold", 300))
         self.dynamic_energy_threshold = bool(stt_cfg.get("dynamic_energy_threshold", True))
         self.ambient_calibration_seconds = float(stt_cfg.get("ambient_calibration_seconds", 0.3))
-        self.pause_threshold = max(0.1, float(stt_cfg.get("pause_threshold", 0.5)))
+        self.pause_threshold = max(0.1, float(stt_cfg.get("pause_threshold", 1.4)))
         self.non_speaking_duration = min(
-            self.pause_threshold, max(0.0, float(stt_cfg.get("non_speaking_duration", 0.2)))
+            self.pause_threshold, max(0.0, float(stt_cfg.get("non_speaking_duration", 0.5)))
         )
         self.phrase_threshold = max(0.0, float(stt_cfg.get("phrase_threshold", 0.15)))
         self.cpu_threads = max(1, int(stt_cfg.get("cpu_threads", 2)))
@@ -384,7 +384,7 @@ class LocalSTT(BaseSTT):
         captured_chunks: List[bytes] = []
         # Preserve the onset without sending the whole initial silence window
         # through Whisper. This also bounds memory when nobody is speaking.
-        pre_roll = deque(maxlen=max(1, math.ceil(self.non_speaking_duration / 0.05)))
+        pre_roll = deque(maxlen=max(1, math.ceil(min(0.2, self.non_speaking_duration) / 0.05)))
         speech_started = False
         consecutive_silence = 0
         voiced_chunks = 0

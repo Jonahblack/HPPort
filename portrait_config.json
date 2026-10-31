@@ -27,8 +27,8 @@
   "state_machine": {
     "wake_confirm_frames": 3,
     "wake_confirm_timeout_seconds": 1.5,
-    "silence_timeout_seconds": 4.0,
-    "max_listen_duration_seconds": 10.0,
+    "silence_timeout_seconds": 5.5,
+    "max_listen_duration_seconds": 15.0,
     "max_consecutive_silence": 2,
     "cooldown_duration_seconds": 8.0
   },
@@ -74,8 +74,8 @@
     "sample_rate": null,
     "chunk_size": 1024,
     "arecord_device": "",
-    "pause_threshold": 0.5,
-    "non_speaking_duration": 0.2,
+    "pause_threshold": 1.4,
+    "non_speaking_duration": 0.5,
     "phrase_threshold": 0.15,
     "cpu_threads": 2,
     "allow_online_fallback": false,
@@ -122,7 +122,7 @@
       "mouth_2": "wilhelm_desk_mouth_2.png",
       "mouth_3": "wilhelm_desk_mouth_3.png"
     },
-    "camera_motion": true,
+    "camera_motion": false,
     "ambient_motes": true,
     "gaze_tracking_enabled": true,
     "gaze_sensitivity_x": 1.0,
@@ -141,6 +141,11 @@
     "transitions": {
       "look_up": "transitions/look_up_frames",
       "return_to_book": "transitions/return_to_book_frames"
+    },
+    "idle_animations": {
+      "page_flip": "idles/page_flip_frames",
+      "tinker_box_study": "idles/tinker_study_frames",
+      "get_out_book": "idles/get_out_book_frames"
     },
     "desk_view": {
       "enabled": true,

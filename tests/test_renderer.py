@@ -138,6 +138,58 @@ class TestPortraitRenderer(unittest.TestCase):
             final_positions.append(self.renderer.current_gaze_x)
         self.assertAlmostEqual(*final_positions, places=6)
 
+    def test_cooldown_state_selects_reading_idle_base(self):
+        reading_surf = pygame.Surface((64, 64))
+        reading_surf.fill((10, 20, 30))
+        speaking_surf = pygame.Surface((64, 64))
+        speaking_surf.fill((40, 50, 60))
+        self.renderer.sprites["wilhelm_reading"] = reading_surf
+        self.renderer.sprites["speaking_base"] = speaking_surf
+        self.renderer.sprites["base"] = reading_surf
+
+        # In COOLDOWN, state_base must remain on reading idle, NOT speaking base
+        self.renderer.set_state(PortraitState.COOLDOWN)
+        self.renderer.transition_player.is_playing = False  # after transition finishes
+        with patch.object(self.renderer, "_scaled_sprite", wraps=self.renderer._scaled_sprite) as mock_scale:
+            self.renderer.render()
+            called_sprites = [call[0][1] for call in mock_scale.call_args_list]
+            self.assertIn(reading_surf, called_sprites)
+            self.assertNotIn(speaking_surf, called_sprites)
+
+    def test_trigger_animation_manual_control(self):
+        frame = pygame.Surface((64, 64))
+        self.renderer.transition_player.register_sequence("page_flip", [frame])
+        self.assertFalse(self.renderer.transition_player.is_playing)
+
+        result = self.renderer.trigger_animation("page_flip")
+        self.assertTrue(result)
+        self.assertTrue(self.renderer.transition_player.is_playing)
+        self.assertEqual(self.renderer.transition_player.active_sequence_id, "page_flip")
+
+    def test_anim_debug_hud_toggle(self):
+        self.assertFalse(self.renderer.show_anim_debug_hud)
+        self.renderer.toggle_anim_debug_hud()
+        self.assertTrue(self.renderer.show_anim_debug_hud)
+        self.renderer.toggle_anim_debug_hud()
+        self.assertFalse(self.renderer.show_anim_debug_hud)
+
+    def test_full_frames_desk_view_locked_no_drift(self):
+        base_surf = pygame.Surface((100, 100))
+        self.renderer.sprites["base"] = base_surf
+        self.renderer.asset_mode = "full_frames"
+        self.renderer.camera_motion = True
+        self.renderer.current_gaze_x = 0.9
+        self.renderer.anim_time = 12.34
+
+        self.renderer.render()
+        canvas_rect = pygame.Rect(int(640*0.04), int(480*0.04), 640 - 2*int(640*0.04), 480 - 2*int(480*0.04)).inflate(-36, -36)
+        bw, bh = base_surf.get_size()
+        scale = max(canvas_rect.width / bw, canvas_rect.height / bh)
+        target_size = (int(bw * scale), int(bh * scale))
+        expected_x = canvas_rect.centerx - target_size[0] // 2
+        expected_y = canvas_rect.centery - target_size[1] // 2
+        self.assertEqual(self.renderer._last_frame_dest, (expected_x, expected_y))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -116,6 +116,7 @@ class PortraitRenderer:
         self.subtitle_text = ""
         self.show_debug_hud = bool(self.config.get("show_debug_hud", False))
         self.show_camera_pip = bool(self.config.get("show_camera_pip", False))
+        self.show_anim_debug_hud = False
         self.camera_feed_surface: Optional[pygame.Surface] = None
         self.camera_status_info: Dict[str, Any] = {}
 
@@ -212,29 +213,28 @@ class PortraitRenderer:
                 self.sprites[key] = None
 
     def _load_transitions(self) -> None:
-        """Preload transition frame sequences into RAM surfaces for 0% CPU decoding."""
-        transition_defs = self.config.get("transitions", {
+        """Preload transition sequences and register idle animations."""
+        trans_defs = self.config.get("transitions", {
             "look_up": "transitions/look_up_frames",
             "return_to_book": "transitions/return_to_book_frames",
         })
-        if not isinstance(transition_defs, dict):
-            return
+        if isinstance(trans_defs, dict):
+            for seq_id, rel_dir in trans_defs.items():
+                dir_path = os.path.join(self.assets_dir, rel_dir)
+                if os.path.isdir(dir_path):
+                    self.transition_player.load_from_directory(seq_id, dir_path)
 
-        for trans_id, rel_dir in transition_defs.items():
-            dir_path = os.path.join(self.assets_dir, rel_dir)
-            if os.path.isdir(dir_path):
-                frames = []
-                frame_files = [f for f in os.listdir(dir_path) if f.lower().endswith((".png", ".jpg", ".jpeg"))]
-                for fname in sorted(frame_files):
-                    fpath = os.path.join(dir_path, fname)
-                    try:
-                        surf = pygame.image.load(fpath).convert()
-                        frames.append(surf)
-                    except Exception as e:
-                        print(f"[Renderer] Error loading frame {fpath}: {e}")
-                if frames:
-                    self.transition_player.register_sequence(trans_id, frames)
-                    print(f"[Renderer] Registered transition '{trans_id}' with {len(frames)} frames from {dir_path}")
+        idle_defs = self.config.get("idle_animations", {
+            "page_flip": "idles/page_flip_frames",
+            "tinker_box_study": "idles/tinker_study_frames",
+            "get_out_book": "idles/get_out_book_frames",
+        })
+        if isinstance(idle_defs, dict):
+            for seq_id, rel_dir in idle_defs.items():
+                dir_path = os.path.join(self.assets_dir, rel_dir)
+                if os.path.isdir(dir_path):
+                    self.transition_player.register_sequence(seq_id, dir_path)
+                    print(f"[Renderer] Registered idle animation '{seq_id}' from {dir_path}")
 
     def _scaled_sprite(self, key: str, sprite: pygame.Surface, size: Tuple[int, int]) -> pygame.Surface:
         cache_key = (key, size[0], size[1])
@@ -329,10 +329,34 @@ class PortraitRenderer:
     def set_state(self, state: PortraitState) -> None:
         prev = self.current_state
         self.current_state = state
+
+        active_idle = (
+            self.sprites.get(self.idle_controller.current_activity)
+            or self.sprites.get("wilhelm_reading")
+            or self.sprites.get("base")
+        )
+        speaking_base = (
+            self.sprites.get("speaking_base")
+            or self.sprites.get("wilhelm_desk_speaking_neutral")
+            or self.sprites.get("base")
+        )
+
         if state == PortraitState.GREETING and self.transition_player.has_sequence("look_up"):
-            self.transition_player.play("look_up")
+            self.transition_player.play(
+                "look_up",
+                outgoing_surface=active_idle,
+                incoming_surface=speaking_base,
+                crossfade_frames=6,
+                lock=True,
+            )
         elif state == PortraitState.COOLDOWN and self.transition_player.has_sequence("return_to_book"):
-            self.transition_player.play("return_to_book")
+            self.transition_player.play(
+                "return_to_book",
+                outgoing_surface=speaking_base,
+                incoming_surface=active_idle,
+                crossfade_frames=6,
+                lock=True,
+            )
 
     def set_audio_amplitude(self, amplitude: float) -> None:
         self.audio_amplitude = max(0.0, min(1.0, amplitude))
@@ -380,6 +404,45 @@ class PortraitRenderer:
 
     def toggle_debug_hud(self) -> None:
         self.show_debug_hud = not self.show_debug_hud
+
+    def toggle_anim_debug_hud(self) -> None:
+        """Toggle the on-screen Idle Animation Debug Controls HUD."""
+        self.show_anim_debug_hud = not self.show_anim_debug_hud
+        print(f"[Renderer] Animation Debug HUD: {'ENABLED' if self.show_anim_debug_hud else 'DISABLED'}")
+
+    def trigger_animation(self, anim_id: str, force: bool = True) -> bool:
+        """Manually trigger an idle or transition animation sequence by ID (for debug/testing)."""
+        if not self.transition_player.has_sequence(anim_id):
+            print(f"[Renderer] Animation sequence '{anim_id}' not found.")
+            return False
+
+        active_idle = (
+            self.sprites.get(self.idle_controller.current_activity)
+            or self.sprites.get("wilhelm_reading")
+            or self.sprites.get("base")
+        )
+        speaking_base = (
+            self.sprites.get("speaking_base")
+            or self.sprites.get("wilhelm_desk_speaking_neutral")
+            or self.sprites.get("base")
+        )
+
+        incoming = active_idle if anim_id in ("return_to_book", "page_flip", "tinker_box_study", "get_out_book") else speaking_base
+        outgoing = active_idle if anim_id != "return_to_book" else speaking_base
+
+        if force and self.transition_player.is_locked:
+            self.transition_player.unlock()
+
+        success = self.transition_player.play(
+            anim_id,
+            outgoing_surface=outgoing,
+            incoming_surface=incoming,
+            crossfade_frames=6,
+            lock=False,
+        )
+        if success:
+            print(f"[Renderer] Debug triggered animation: '{anim_id}'")
+        return success
 
     def _draw_procedural_portrait(
         self,
@@ -584,25 +647,33 @@ class PortraitRenderer:
             self.screen.blit(scaled_bg, (bg_dest_x, bg_dest_y))
 
         if self.transition_player.is_playing:
-            trans_frame = self.transition_player.update()
+            bw, bh = self.transition_player.get_native_size() or (1024, 768)
+            scale = max(canvas_rect.width / bw, canvas_rect.height / bh)
+            target_size = (int(bw * scale), int(bh * scale))
+            dest_x = canvas_rect.centerx - target_size[0] // 2
+            dest_y = canvas_rect.centery - target_size[1] // 2
+            self._last_frame_dest = (dest_x, dest_y)
+            trans_frame = self.transition_player.update(target_size=target_size)
             if trans_frame is not None:
-                bw, bh = trans_frame.get_size()
-                scale = max(canvas_rect.width / bw, canvas_rect.height / bh)
-                target_size = (int(bw * scale), int(bh * scale))
-                dest_x = canvas_rect.centerx - target_size[0] // 2
-                dest_y = canvas_rect.centery - target_size[1] // 2
-                scaled_trans = pygame.transform.smoothscale(trans_frame, target_size)
-                self.screen.blit(scaled_trans, (dest_x, dest_y))
+                self.screen.blit(trans_frame, (dest_x, dest_y))
                 self._draw_magic_motes(canvas_rect)
         elif base_sprite is not None and self.asset_mode == "full_frames":
             # Select active base frame based on state (Desk View):
-            # IDLE / WAKE_PENDING -> reading / tinker idle frame
-            # GREETING / LISTENING / THINKING / SPEAKING / COOLDOWN -> speaking frame
-            if self.current_state in (PortraitState.IDLE, PortraitState.WAKE_PENDING):
-                active_idle = self.sprites.get(self.idle_controller.current_activity) or                               self.sprites.get("wilhelm_reading") or                               base_sprite
+            # IDLE / WAKE_PENDING / COOLDOWN -> reading / tinker idle frame
+            # GREETING / LISTENING / THINKING / SPEAKING -> speaking frame
+            if self.current_state in (PortraitState.IDLE, PortraitState.WAKE_PENDING, PortraitState.COOLDOWN):
+                active_idle = (
+                    self.sprites.get(self.idle_controller.current_activity)
+                    or self.sprites.get("wilhelm_reading")
+                    or base_sprite
+                )
                 state_base = active_idle
             else:
-                state_base = self.sprites.get("speaking_base") or                              self.sprites.get("wilhelm_desk_speaking_neutral") or                              base_sprite
+                state_base = (
+                    self.sprites.get("speaking_base")
+                    or self.sprites.get("wilhelm_desk_speaking_neutral")
+                    or base_sprite
+                )
 
             if blink_stage == "closed" and eyes_closed_sprite is not None:
                 frame_key = "eyes_closed"
@@ -618,15 +689,20 @@ class PortraitRenderer:
             frame_sprite = self.sprites.get(frame_key) if frame_key != "base" else state_base
             frame_sprite = frame_sprite or state_base
             bw, bh = frame_sprite.get_size()
-            overscan = 1.025 if self.camera_motion else 1.0
-            scale = max(canvas_rect.width / bw, canvas_rect.height / bh) * overscan
+            scale = max(canvas_rect.width / bw, canvas_rect.height / bh)
             target_size = (int(bw * scale), int(bh * scale))
-            drift_x = (math.sin(self.anim_time * 0.23) * 3.0 if self.camera_motion else 0.0) + head_yaw_x
-            drift_y = (breath_offset + (math.sin(self.anim_time * 0.17) * 2.0 if self.camera_motion else 0.0)) + head_pitch_y
-            dest_x = canvas_rect.centerx - target_size[0] // 2 + int(drift_x)
-            dest_y = canvas_rect.centery - target_size[1] // 2 + int(drift_y)
 
-            scaled_frame = self._scaled_sprite(frame_key if frame_key != "base" else str(id(state_base)), frame_sprite, target_size)
+            # Full-frame Desk View: 100% stationary and locked background geometry.
+            # Zero camera drift, zero breathing offset of the room, zero head-yaw room shifting.
+            dest_x = canvas_rect.centerx - target_size[0] // 2
+            dest_y = canvas_rect.centery - target_size[1] // 2
+            self._last_frame_dest = (dest_x, dest_y)
+
+            scaled_frame = self._scaled_sprite(
+                frame_key if frame_key != "base" else str(id(state_base)),
+                frame_sprite,
+                target_size,
+            )
             self.screen.blit(scaled_frame, (dest_x, dest_y))
             self._draw_magic_motes(canvas_rect)
         elif base_sprite is not None:
@@ -791,8 +867,53 @@ class PortraitRenderer:
                 surf = self._text(self.hud_font, line, color)
                 self.screen.blit(surf, (hud_x + 10, hud_y + 8 + i * 17))
 
+        # 6.5. Idle Animation Debug Controls HUD (Hotkey [I] to toggle)
+        if getattr(self, "show_anim_debug_hud", False):
+            anim_hud_w = 420
+            anim_hud_h = 220
+            anim_hud_x = frame_margin_x + 24
+            anim_hud_y = frame_margin_y + 24 + (168 if self.show_debug_hud else 0)
+
+            hud_bg = pygame.Rect(anim_hud_x, anim_hud_y, anim_hud_w, anim_hud_h)
+            pygame.draw.rect(self.screen, (12, 14, 20, 230), hud_bg, border_radius=6)
+            pygame.draw.rect(self.screen, (245, 158, 11), hud_bg, width=1, border_radius=6)
+
+            active_seq = self.transition_player.active_sequence_id if self.transition_player.is_playing else None
+            frame_idx = self.transition_player.current_frame_index if active_seq else 0
+            total_f = len(self.transition_player.frames) if active_seq else 0
+            pct = (frame_idx / max(1, total_f)) * 100.0 if total_f > 0 else 0.0
+
+            status_str = f"PLAYING [{active_seq}]" if active_seq else "IDLE (WAITING)"
+            lock_str = "LOCKED" if self.transition_player.is_locked else "FREE"
+
+            hud_lines = [
+                ("ANIMATION DEBUG CONTROLS [ACTIVE]", (250, 204, 21)),
+                (f"Status:   {status_str} | {lock_str} | Native: 24 FPS", (220, 240, 255)),
+                (f"Progress: Frame {frame_idx:03d} / {total_f:03d} ({pct:5.1f}%)", (56, 189, 248)),
+                ("Hotkeys:", (180, 200, 220)),
+                ("  [1] page_flip        (240f - Page Turn Idle)", (200, 220, 240)),
+                ("  [2] tinker_box_study (240f - Tinker Box Idle)", (200, 220, 240)),
+                ("  [3] get_out_book     (240f - Get Out Book Idle)", (200, 220, 240)),
+                ("  [4] look_up          ( 60f - Desk->Gaze Transition)", (200, 220, 240)),
+                ("  [5] return_to_book   ( 66f - Gaze->Desk Transition)", (200, 220, 240)),
+                ("  [I] Toggle this HUD", (150, 160, 170)),
+            ]
+
+            bar_x = anim_hud_x + 10
+            bar_y = anim_hud_y + 46
+            bar_w = anim_hud_w - 20
+            bar_h = 5
+            pygame.draw.rect(self.screen, (35, 45, 60), (bar_x, bar_y, bar_w, bar_h), border_radius=3)
+            if pct > 0:
+                pygame.draw.rect(self.screen, (56, 189, 248), (bar_x, bar_y, int(bar_w * (pct / 100.0)), bar_h), border_radius=3)
+
+            for i, (line, color) in enumerate(hud_lines):
+                y_offset = 8 + i * 16 + (8 if i >= 3 else 0)
+                surf = self._text(self.hud_font, line, color)
+                self.screen.blit(surf, (anim_hud_x + 10, anim_hud_y + y_offset))
+
         # 7. Hotkey Controls Help Bar at very bottom
-        help_text = "[SPACE] Wake | [T] Talk | [C] Camera | [H] Details | [ESC] Quit"
+        help_text = "[SPACE] Wake | [T] Talk | [1-5] Play Anim | [I] Anim HUD | [C] Cam | [H] Info | [ESC] Quit"
         help_surf = self._text(self.hud_font, help_text, (130, 120, 100))
         self.screen.blit(help_surf, (center_x - help_surf.get_width() // 2, h - 22))
 

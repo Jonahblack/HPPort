@@ -1,6 +1,7 @@
 """Unit tests for Portrait State Machine."""
 
 import unittest
+import time
 from copy import deepcopy
 from config import DEFAULT_CONFIG
 from state_machine import PortraitStateMachine, PortraitState
@@ -39,6 +40,41 @@ class TestPortraitStateMachine(unittest.TestCase):
         self.fsm.state = PortraitState.LISTENING
         self.fsm.on_speech_detected()
         self.assertEqual(self.fsm.state, PortraitState.THINKING)
+
+    def test_speech_detected_during_cooldown_triggers_thinking(self):
+        self.fsm.start_cooldown()
+        self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
+        self.fsm.on_speech_detected()
+        self.assertEqual(self.fsm.state, PortraitState.THINKING)
+
+    def test_cooldown_presence_latching_prevents_immediate_rewake(self):
+        self.fsm.start_cooldown()
+        self.assertTrue(self.fsm._cooldown_presence_latched)
+
+        # Person still standing there during cooldown
+        self.fsm.on_person_frame(True)
+        self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
+
+        # Cooldown expires
+        time.sleep(0.55)
+        self.fsm.update()
+        self.assertEqual(self.fsm.state, PortraitState.IDLE)
+        self.assertTrue(self.fsm._cooldown_presence_latched)
+
+        # Lingering visitor continues to be detected - MUST NOT wake
+        for _ in range(5):
+            self.fsm.on_person_frame(True)
+            self.assertEqual(self.fsm.state, PortraitState.IDLE)
+
+        # Visitor leaves frame
+        self.fsm.on_person_frame(False)
+        self.assertFalse(self.fsm._cooldown_presence_latched)
+
+        # New visitor arrives: debouncing works normally
+        self.fsm.on_person_frame(True)
+        self.assertEqual(self.fsm.state, PortraitState.IDLE)
+        self.fsm.on_person_frame(True)
+        self.assertEqual(self.fsm.state, PortraitState.WAKE_PENDING)
 
     def test_llm_ready_to_speaking(self):
         self.fsm.state = PortraitState.THINKING
