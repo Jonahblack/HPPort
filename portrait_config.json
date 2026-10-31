@@ -145,7 +145,8 @@
     "idle_animations": {
       "page_flip": "idles/page_flip_frames",
       "tinker_box_study": "idles/tinker_study_frames",
-      "get_out_book": "idles/get_out_book_frames"
+      "get_out_book": "idles/get_out_book_frames",
+      "get_out_tinker_box": "idles/get_out_tinker_box_frames"
     },
     "desk_view": {
       "enabled": true,

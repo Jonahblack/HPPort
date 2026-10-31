@@ -73,6 +73,14 @@ DEFAULT_MANIFEST: Dict[str, Any] = {
             "frames_dir": "idles/get_out_book_frames",
             "loop": False,
             "description": "Activity bridge: sets aside tinker box and gets out book"
+        },
+        {
+            "id": "get_out_tinker_box",
+            "source_file": "get_out_tinker_box.mp4",
+            "target_file": "idles/get_out_tinker_box.mp4",
+            "frames_dir": "idles/get_out_tinker_box_frames",
+            "loop": False,
+            "description": "Activity bridge: transition from empty desk to tinkering box"
         }
     ],
     "stills": [

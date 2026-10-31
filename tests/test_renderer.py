@@ -159,12 +159,17 @@ class TestPortraitRenderer(unittest.TestCase):
     def test_trigger_animation_manual_control(self):
         frame = pygame.Surface((64, 64))
         self.renderer.transition_player.register_sequence("page_flip", [frame])
+        self.renderer.transition_player.register_sequence("get_out_tinker_box", [frame])
         self.assertFalse(self.renderer.transition_player.is_playing)
 
         result = self.renderer.trigger_animation("page_flip")
         self.assertTrue(result)
         self.assertTrue(self.renderer.transition_player.is_playing)
         self.assertEqual(self.renderer.transition_player.active_sequence_id, "page_flip")
+
+        result2 = self.renderer.trigger_animation("get_out_tinker_box")
+        self.assertTrue(result2)
+        self.assertEqual(self.renderer.transition_player.active_sequence_id, "get_out_tinker_box")
 
     def test_anim_debug_hud_toggle(self):
         self.assertFalse(self.renderer.show_anim_debug_hud)
