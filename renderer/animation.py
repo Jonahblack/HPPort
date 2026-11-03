@@ -417,16 +417,11 @@ class TransitionSequencePlayer:
         crossfade_frames: int = 6,
     ) -> bool:
         """Begin playing a registered transition sequence."""
-        if self.is_locked and not restart:
+        if self.is_locked:
             return False
 
         seq = self.sequences.get(sequence_id)
         if not seq:
-            if on_complete:
-                try:
-                    on_complete()
-                except Exception as exc:
-                    print(f"[TransitionSequencePlayer] Error in callback: {exc}")
             return False
 
         # Load frames if registered as directory path
@@ -494,6 +489,13 @@ class TransitionSequencePlayer:
         target_frame = int(elapsed * seq_fps)
 
         if target_frame >= len(self.frames):
+            active_list = self.get_scaled_frames(target_size) if target_size else self.frames
+            final = active_list[-1]
+            if self.incoming_surface is not None and self.crossfade_frames:
+                import pygame
+                final = self.incoming_surface
+                if target_size and hasattr(final, "get_size") and final.get_size() != target_size:
+                    final = pygame.transform.smoothscale(final, target_size)
             self.is_playing = False
             self.is_locked = False
             self.current_frame_index = len(self.frames) - 1
@@ -504,8 +506,7 @@ class TransitionSequencePlayer:
                     cb()
                 except Exception as exc:
                     print(f"[TransitionSequencePlayer] Error in on_complete: {exc}")
-            active_list = self.get_scaled_frames(target_size) if target_size else self.frames
-            return active_list[-1]
+            return final
 
         self.current_frame_index = target_frame
         active_list = self.get_scaled_frames(target_size) if target_size else self.frames
@@ -551,6 +552,14 @@ class TransitionSequencePlayer:
         if self.frames and 0 <= self.current_frame_index < len(self.frames):
             return self.frames[self.current_frame_index]
         return None
+
+    def get_native_size(self):
+        frame = self.get_current_frame()
+        return frame.get_size() if hasattr(frame, "get_size") else None
+
+    def unlock(self):
+        """Explicit debug override; normal play requests cannot bypass a lock."""
+        self.is_locked = False
 
     def stop(self) -> None:
         self.is_playing = False

@@ -28,6 +28,11 @@ class TestTalkingPortraitApp(unittest.TestCase):
         app.current_audio_thread = None
         app.conversation_history = []
         app.renderer = Mock()
+        app.renderer.is_scene_ready.return_value = True
+        app.renderer.scene_error.return_value = None
+        app._pending_greeting = None
+        app._pending_text = None
+        app._greeting_playing = False
         app.stt = Mock()
         app.safeguard = Mock()
         app.safeguard.get_metrics.return_value = {"daily_used": 1000, "daily_limit": 1000, "status_text": "EXCEEDED"}
@@ -144,6 +149,49 @@ class TestTalkingPortraitApp(unittest.TestCase):
         with patch("main.parse_args", return_value=Mock(config="pi.json", demo=False, fullscreen=True)), patch("main.TalkingPortraitApp") as app:
             main()
         app.assert_called_once_with("pi.json", demo_mode=False, fullscreen=True)
+
+    def test_typed_question_waits_for_visual_readiness(self):
+        app = self.app
+        app.renderer.is_scene_ready.return_value = False
+        app._generate_and_speak = Mock()
+        app._submit_text("Hello")
+        app._generate_and_speak.assert_not_called()
+        app._service_scene()
+        app._generate_and_speak.assert_not_called()
+        app.renderer.is_scene_ready.return_value = True
+        app._service_scene()
+        app._service_scene()
+        app._generate_and_speak.assert_called_once_with("Hello", 0.0)
+
+    def test_greeting_prepares_early_but_audio_waits_for_scene(self):
+        app = self.app
+        prepared = {"path": "prepared.wav"}
+        app._prepare_phrase = Mock(return_value=prepared)
+        app._play_prepared = Mock()
+        app._discard_prepared = Mock()
+        app.renderer.is_scene_ready.return_value = False
+        app.fsm.transition_to(PortraitState.GREETING)
+        self.run_worker()
+        app._prepare_phrase.assert_called_once()
+        app._service_scene()
+        app._play_prepared.assert_not_called()
+        self.assertEqual(app.fsm.state, PortraitState.GREETING)
+        app.renderer.is_scene_ready.return_value = True
+        app._service_scene()
+        self.run_worker()
+        app._play_prepared.assert_called_once_with(prepared)
+        app._discard_prepared.assert_called_once_with(prepared)
+        self.assertEqual(app.fsm.state, PortraitState.LISTENING)
+
+    def test_stale_greeting_audio_and_completion_are_rejected(self):
+        app = self.app
+        app._discard_prepared = Mock()
+        app.fsm.state = PortraitState.GREETING
+        app._accept_greeting(0, {"path": "old.wav"})
+        app._discard_prepared.assert_called_once()
+        self.assertIsNone(app._pending_greeting)
+        app._greeting_finished(0)
+        self.assertEqual(app.fsm.state, PortraitState.GREETING)
 
     def test_cleanup_closes_drivers_even_when_worker_is_absent(self):
         app = self.app

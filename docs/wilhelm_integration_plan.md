@@ -1,5 +1,7 @@
 # Wilhelm Talking Portrait: Asset Integration & Technical Architecture Plan (v2.0)
 
+> Historical plan. Its short crops, frame-cache architecture, and endpoint claims have been superseded by the [approved animation plan](wilhelm_animation_implementation_plan.md) and [current playback implementation](wilhelm_playback.md).
+
 ## 1. Executive Summary & Asset Catalog
 
 This document defines the complete engineering architecture and asset pipeline for integrating Wilhelm's final graphics (`Wilhelm_Generated/`) into the Talking Portrait project (`HPPort`).

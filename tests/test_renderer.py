@@ -36,9 +36,12 @@ class TestPortraitRenderer(unittest.TestCase):
         self.assertTrue(self.renderer.transition_player.is_playing)
         self.assertEqual(self.renderer.transition_player.active_sequence_id, "look_up")
 
-        # Cooldown triggers return_to_book transition
+        # A state request cannot force-cut a locked physical action.
         self.renderer.set_state(PortraitState.COOLDOWN)
         self.assertTrue(self.renderer.transition_player.is_playing)
+        self.assertEqual(self.renderer.transition_player.active_sequence_id, "look_up")
+        self.renderer.transition_player.stop()
+        self.renderer.set_state(PortraitState.COOLDOWN)
         self.assertEqual(self.renderer.transition_player.active_sequence_id, "return_to_book")
 
     def test_gaze_target_clamping_and_updating(self):
@@ -49,6 +52,26 @@ class TestPortraitRenderer(unittest.TestCase):
         self.renderer.set_gaze_target(2.5, -3.0)
         self.assertEqual(self.renderer.target_gaze_x, 1.0)
         self.assertEqual(self.renderer.target_gaze_y, -1.0)
+
+    def test_directed_scene_retains_video_endpoint_and_never_substitutes_face_sprites(self):
+        endpoint = pygame.Surface((128, 72))
+        endpoint.fill((20, 80, 140))
+        unrelated = pygame.Surface((128, 72))
+        unrelated.fill((250, 0, 0))
+        self.renderer.sprites.update(base=unrelated, mouth_3=unrelated, eyes_closed=unrelated)
+        self.renderer.scene_director = MagicMock()
+        self.renderer.scene_director.scene = "engaged_book"
+        self.renderer.scene_director.catalog = {"scenes": {"engaged_book": {"sprite": "base"}}}
+        player = MagicMock()
+        player.last_surface = endpoint
+        player.is_playing = False
+        player.update.return_value = endpoint
+        self.renderer.transition_player = player
+        self.renderer.set_viseme("D")
+        for state in (PortraitState.GREETING, PortraitState.LISTENING, PortraitState.SPEAKING, PortraitState.COOLDOWN):
+            self.renderer.set_state(state)
+            self.renderer.render()
+            self.assertEqual(self.renderer.screen.get_at((320, 240))[:3], (20, 80, 140))
 
     def test_viseme_updating_and_legacy_fallback(self):
         for viseme, mouth in (("D", 3), ("B", 2), ("X", 1), ("INVALID", 1)):

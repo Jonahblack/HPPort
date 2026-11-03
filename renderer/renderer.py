@@ -9,6 +9,10 @@ import pygame
 from typing import Dict, Any, Optional, Tuple
 from state_machine import PortraitState
 from renderer.animation import BlinkController, LipSyncEngine, SaccadeController, TransitionSequencePlayer, IdleActivityController, VISEME_NAMES
+from renderer.asset_catalog import load_catalog
+from renderer.scene_director import SceneDirector
+from renderer.video import BufferedVideoPlayer
+from renderer.timing import FrameClock
 
 
 class PortraitRenderer:
@@ -53,10 +57,12 @@ class PortraitRenderer:
             print(f"[Audio] Pygame mixer initialization notice: {exc}")
 
         flags = pygame.FULLSCREEN if self.fullscreen else pygame.RESIZABLE
-        self.screen = pygame.display.set_mode((self.width, self.height), flags)
+        display_size = (0, 0) if self.fullscreen and self.config.get("use_display_resolution", True) else (self.width, self.height)
+        self.screen = pygame.display.set_mode(display_size, flags)
+        self.width, self.height = self.screen.get_size()
         pygame.display.set_caption(self.config.get("window_title", "Harry Potter Talking Portrait (Gemma 4)"))
 
-        self.clock = pygame.time.Clock()
+        self.clock = FrameClock()
         
         # Load System Fonts
         self.font = pygame.font.SysFont("Georgia", 20, italic=True)
@@ -92,6 +98,7 @@ class PortraitRenderer:
         self._scaled_sprite_cache: Dict[Tuple[str, int, int], pygame.Surface] = {}
         self.transition_player = TransitionSequencePlayer(fps=self.fps)
         self.idle_controller = IdleActivityController()
+        self.scene_director = None
         self._load_sprites()
         self._load_transitions()
 
@@ -153,6 +160,7 @@ class PortraitRenderer:
                 "speaking_base": ["wilhelm_desk_speaking_neutral.png", "end_conversation.png", "base.png"],
                 "wilhelm_reading": ["wilhelm_reading.png", "A01_reading.png"],
                 "wilhelm_tinker": ["wilhelm_tinker.jpeg", "tinker_box.jpeg"],
+                "wilhelm_neutral": ["wilhelm_neutral.jpeg", "natural_state.jpeg"],
                 "eyes_half": ["wilhelm_desk_eyes_half.png", "forest_warrior_blink_half.png", "eyes_half.png"],
                 "eyes_closed": ["wilhelm_desk_eyes_closed.png", "forest_warrior_blink.png", "eyes_closed.png"],
                 "mouth_1": ["wilhelm_desk_mouth_1.png", "wilhelm_desk_speaking_neutral.png", "mouth_1.png"],
@@ -214,6 +222,26 @@ class PortraitRenderer:
 
     def _load_transitions(self) -> None:
         """Preload transition sequences and register idle animations."""
+        scene_config = self.config.get("scene_director", {})
+        if scene_config.get("enabled", False):
+            import cv2
+            # OpenCV's default can allocate one resize worker per host CPU core.
+            cv2.setNumThreads(int(scene_config.get("opencv_threads", 1)))
+            catalog = load_catalog(scene_config.get("manifest", "wilhelm_asset_manifest.json"))
+            for clip in catalog["clips"]:
+                clip["available"] = os.path.isfile(clip["path"])
+                if not clip["available"]:
+                    print(f"[Scene] Missing clip: {clip['path']}")
+            self.transition_player = BufferedVideoPlayer(
+                memory_mb=scene_config.get("video_memory_mb", 64),
+                max_width=scene_config.get("decode_width", 960),
+                preparation_timeout=scene_config.get("preparation_timeout_seconds", 15),
+            )
+            self.scene_director = SceneDirector(catalog, self.transition_player, scene_config,
+                                                preview=scene_config.get("preview", False))
+            print(f"[Scene] Buffered playback; viewport {self.width}x{self.height}, "
+                  f"RGB budget {self.transition_player.memory_bytes // (1024 * 1024)} MiB")
+            return
         trans_defs = self.config.get("transitions", {
             "look_up": "transitions/look_up_frames",
             "return_to_book": "transitions/return_to_book_frames",
@@ -222,7 +250,7 @@ class PortraitRenderer:
             for seq_id, rel_dir in trans_defs.items():
                 dir_path = os.path.join(self.assets_dir, rel_dir)
                 if os.path.isdir(dir_path):
-                    self.transition_player.load_from_directory(seq_id, dir_path)
+                    self.transition_player.load_from_directory(seq_id, dir_path, fps=24)
 
         idle_defs = self.config.get("idle_animations", {
             "page_flip": "idles/page_flip_frames",
@@ -234,7 +262,7 @@ class PortraitRenderer:
             for seq_id, rel_dir in idle_defs.items():
                 dir_path = os.path.join(self.assets_dir, rel_dir)
                 if os.path.isdir(dir_path):
-                    self.transition_player.register_sequence(seq_id, dir_path)
+                    self.transition_player.register_sequence(seq_id, dir_path, fps=24)
                     print(f"[Renderer] Registered idle animation '{seq_id}' from {dir_path}")
 
     def _scaled_sprite(self, key: str, sprite: pygame.Surface, size: Tuple[int, int]) -> pygame.Surface:
@@ -331,8 +359,15 @@ class PortraitRenderer:
         prev = self.current_state
         self.current_state = state
 
+        if self.scene_director:
+            if state in (PortraitState.GREETING, PortraitState.THINKING):
+                self.scene_director.request_engagement()
+            elif state == PortraitState.COOLDOWN:
+                self.scene_director.request_return()
+            return
+
         active_idle = (
-            self.sprites.get(self.idle_controller.current_activity)
+            self.sprites.get(self.idle_controller.activities[self.idle_controller.current_activity]["base_sprite"])
             or self.sprites.get("wilhelm_reading")
             or self.sprites.get("base")
         )
@@ -358,6 +393,25 @@ class PortraitRenderer:
                 crossfade_frames=6,
                 lock=True,
             )
+
+    def update_scene(self):
+        if self.scene_director:
+            self.scene_director.update(idle=self.current_state == PortraitState.IDLE)
+            if self.scene_director.error:
+                self.set_latency_metric("scene", self.scene_director.error)
+            else:
+                self.set_latency_metric("scene", f"{self.scene_director.scene} -> {self.scene_director.target or '--'}")
+
+    def is_scene_ready(self):
+        return self.scene_director.ready_for_speech if self.scene_director else not self.transition_player.is_playing
+
+    def is_scene_settled(self):
+        if self.scene_director:
+            return self.scene_director.active is None and (self.scene_director.settled or bool(self.scene_director.error))
+        return not self.transition_player.is_playing
+
+    def scene_error(self):
+        return self.scene_director.error if self.scene_director else None
 
     def set_audio_amplitude(self, amplitude: float) -> None:
         self.audio_amplitude = max(0.0, min(1.0, amplitude))
@@ -413,12 +467,17 @@ class PortraitRenderer:
 
     def trigger_animation(self, anim_id: str, force: bool = True) -> bool:
         """Manually trigger an idle or transition animation sequence by ID (for debug/testing)."""
+        if self.scene_director:
+            # Live controls respect physical routes and never force-cut a committed action.
+            if self.current_state != PortraitState.IDLE:
+                return False
+            return self.scene_director.request_action(anim_id)
         if not self.transition_player.has_sequence(anim_id):
             print(f"[Renderer] Animation sequence '{anim_id}' not found.")
             return False
 
         active_idle = (
-            self.sprites.get(self.idle_controller.current_activity)
+            self.sprites.get(self.idle_controller.activities[self.idle_controller.current_activity]["base_sprite"])
             or self.sprites.get("wilhelm_reading")
             or self.sprites.get("base")
         )
@@ -567,6 +626,7 @@ class PortraitRenderer:
 
     def render(self) -> None:
         """Main frame render call."""
+        render_started = time.perf_counter()
         w, h = self.screen.get_size()
         center_x = w // 2
         if (w, h) != self._viewport_size:
@@ -647,7 +707,36 @@ class PortraitRenderer:
             scaled_bg = self._scaled_sprite("background", bg_sprite, bg_size)
             self.screen.blit(scaled_bg, (bg_dest_x, bg_dest_y))
 
-        if self.transition_player.is_playing:
+        if self.scene_director:
+            # Always retain the real endpoint, including throughout speech and cooldown.
+            # No face layers are applied to video until an authored compatible set exists.
+            scene = self.scene_director.catalog["scenes"].get(self.scene_director.scene, {})
+            fallback = self.sprites.get(scene.get("sprite", "wilhelm_reading")) or base_sprite
+            # One scene canvas prevents a small aspect-ratio change between masters and video.
+            bw, bh = self.scene_director.catalog.get("canvas_size", [1280, 720])
+            fit = min if self.config.get("scene_fit", "contain") == "contain" else max
+            scale = fit(canvas_rect.width / bw, canvas_rect.height / bh)
+            target_size = (max(1, round(bw * scale)), max(1, round(bh * scale)))
+            dest = (canvas_rect.centerx - target_size[0] // 2, canvas_rect.centery - target_size[1] // 2)
+            self._last_frame_dest = dest
+            if self.transition_player.last_surface is None and fallback is not None:
+                crop = fallback.get_rect()
+                if crop.width / crop.height > bw / bh:
+                    crop.width = round(crop.height * bw / bh)
+                else:
+                    crop.height = round(crop.width * bh / bw)
+                crop.center = fallback.get_rect().center
+                fallback = fallback.subsurface(crop)
+                self.transition_player._outgoing = fallback
+            surface = self.transition_player.update(target_size)
+            if surface is not None:
+                if surface.get_size() != target_size:
+                    surface = pygame.transform.smoothscale(surface, target_size)
+                self.screen.blit(surface, dest)
+            elif fallback is not None:
+                self.screen.blit(self._scaled_sprite(str(id(fallback)), fallback, target_size), dest)
+            self._draw_magic_motes(canvas_rect)
+        elif self.transition_player.is_playing:
             bw, bh = self.transition_player.get_native_size() or (1024, 768)
             scale = max(canvas_rect.width / bw, canvas_rect.height / bh)
             target_size = (int(bw * scale), int(bh * scale))
@@ -664,7 +753,7 @@ class PortraitRenderer:
             # GREETING / LISTENING / THINKING / SPEAKING -> speaking frame
             if self.current_state in (PortraitState.IDLE, PortraitState.WAKE_PENDING, PortraitState.COOLDOWN):
                 active_idle = (
-                    self.sprites.get(self.idle_controller.current_activity)
+                    self.sprites.get(self.idle_controller.activities[self.idle_controller.current_activity]["base_sprite"])
                     or self.sprites.get("wilhelm_reading")
                     or base_sprite
                 )
@@ -848,7 +937,7 @@ class PortraitRenderer:
             hud_y = frame_margin_y + 24
             hud_x = frame_margin_x + 24
             
-            hud_bg = pygame.Rect(hud_x, hud_y, 360, 158)
+            hud_bg = pygame.Rect(hud_x, hud_y, 450, 178)
             pygame.draw.rect(self.screen, (10, 12, 15, 215), hud_bg, border_radius=6)
             pygame.draw.rect(self.screen, (50, 65, 80), hud_bg, width=1, border_radius=6)
 
@@ -861,7 +950,9 @@ class PortraitRenderer:
                 f"Turnaround:     {self.latency_metrics.get('turnaround', '--')}",
                 f"Token Quota:    {self.latency_metrics.get('quota', '100% LOCAL')}",
                 f"Gaze Tracking:  ({self.current_gaze_x:+.2f}, {self.current_gaze_y:+.2f}) Dist: {self.current_distance:.1f}",
-                f"Viseme/Eyelids: Viseme_{self.current_viseme} (Mouth_{self.current_mouth_index}) | {self.blink_controller.get_stage().upper()}",
+                ("Face animation: held video endpoint" if self.scene_director else
+                 f"Viseme/Eyelids: Viseme_{self.current_viseme} | {self.blink_controller.get_stage().upper()}"),
+                f"Scene: {self.latency_metrics.get('scene', 'legacy image renderer')[:65]}",
             ]
             for i, line in enumerate(lines):
                 color = (250, 204, 21) if i == 0 else (200, 220, 240)
@@ -871,9 +962,9 @@ class PortraitRenderer:
         # 6.5. Idle Animation Debug Controls HUD (Hotkey [I] to toggle)
         if getattr(self, "show_anim_debug_hud", False):
             anim_hud_w = 420
-            anim_hud_h = 236
+            anim_hud_h = 270
             anim_hud_x = frame_margin_x + 24
-            anim_hud_y = frame_margin_y + 24 + (168 if self.show_debug_hud else 0)
+            anim_hud_y = frame_margin_y + 24 + (188 if self.show_debug_hud else 0)
 
             hud_bg = pygame.Rect(anim_hud_x, anim_hud_y, anim_hud_w, anim_hud_h)
             pygame.draw.rect(self.screen, (12, 14, 20, 230), hud_bg, border_radius=6)
@@ -881,8 +972,9 @@ class PortraitRenderer:
 
             active_seq = self.transition_player.active_sequence_id if self.transition_player.is_playing else None
             frame_idx = self.transition_player.current_frame_index if active_seq else 0
-            total_f = len(self.transition_player.frames) if active_seq else 0
-            pct = (frame_idx / max(1, total_f)) * 100.0 if total_f > 0 else 0.0
+            total_f = (getattr(getattr(self.transition_player, "_active", None), "count", 0)
+                       if self.scene_director else len(self.transition_player.frames)) if active_seq else 0
+            pct = self.transition_player.get_progress() * 100.0
 
             status_str = f"PLAYING [{active_seq}]" if active_seq else "IDLE (WAITING)"
             lock_str = "LOCKED" if self.transition_player.is_locked else "FREE"
@@ -896,8 +988,8 @@ class PortraitRenderer:
                 ("  [2] tinker_box_study   (240f - Tinker Box Idle)", (200, 220, 240)),
                 ("  [3] get_out_book       (240f - Get Out Book Idle)", (200, 220, 240)),
                 ("  [4] get_out_tinker_box (240f - Get Out Tinker Box)", (200, 220, 240)),
-                ("  [5] look_up            ( 60f - Desk->Gaze Transition)", (200, 220, 240)),
-                ("  [6] return_to_book     ( 66f - Gaze->Desk Transition)", (200, 220, 240)),
+                ("  [5] look_up            (complete source action)", (200, 220, 240)),
+                ("  [6] return_to_book     (complete source action)", (200, 220, 240)),
                 ("  [I] Toggle this HUD", (150, 160, 170)),
             ]
 
@@ -920,10 +1012,13 @@ class PortraitRenderer:
         self.screen.blit(help_surf, (center_x - help_surf.get_width() // 2, h - 22))
 
         pygame.display.flip()
+        self.last_render_work_ms = (time.perf_counter() - render_started) * 1000
         self.clock.tick(self.fps)
 
     def cleanup(self) -> None:
         try:
+            if self.scene_director:
+                self.scene_director.close()
             pygame.quit()
         except Exception:
             pass

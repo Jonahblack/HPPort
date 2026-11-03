@@ -134,12 +134,12 @@ class PortraitStateMachine:
         self.cooldown_start_time = time.monotonic()
         self.transition_to(PortraitState.COOLDOWN)
 
-    def update(self) -> None:
+    def update(self, visual_ready: bool = True) -> None:
         """Periodic tick to evaluate timeouts."""
         now = time.monotonic()
 
         if self.state == PortraitState.COOLDOWN:
-            if self.cooldown_start_time and (now - self.cooldown_start_time >= self.cooldown_duration):
+            if visual_ready and self.cooldown_start_time is not None and (now - self.cooldown_start_time >= self.cooldown_duration):
                 self.cooldown_start_time = None
                 self.silence_count = 0
                 self.transition_to(PortraitState.IDLE)

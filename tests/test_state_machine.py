@@ -96,6 +96,14 @@ class TestPortraitStateMachine(unittest.TestCase):
         self.fsm.on_speech_silence()
         self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
 
+    def test_elapsed_cooldown_waits_for_physical_action(self):
+        self.fsm.start_cooldown()
+        self.fsm.cooldown_start_time -= 10
+        self.fsm.update(visual_ready=False)
+        self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
+        self.fsm.update(visual_ready=True)
+        self.assertEqual(self.fsm.state, PortraitState.IDLE)
+
 
 if __name__ == "__main__":
     unittest.main()

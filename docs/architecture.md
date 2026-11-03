@@ -41,11 +41,15 @@ Optional `response_voice: native` sends the completed Whisper transcript and rec
 
 ## Input and graphics
 
+Wilhelm scene playback uses `renderer/scene_director.py` to keep physical pose/prop state separate from conversation state. The version 2 asset manifest describes compatible edges. The director commits a scene only after the clip completes, queues visitor intentions until an endpoint checkpoint, and gates speech readiness. Autonomous activity changes require enabled engagement and return routes.
+
+`renderer/video.py` decodes the originals on bounded workers and retains one presented frame. Source FPS is independent of the display's monotonic frame limiter. Preparation does not consume presentation time; underflow holds the current frame rather than skipping motion. Pygame surfaces and director completions are handled on the display thread. The current temporary conversation fallback is the actual look-up endpoint with no additional face animation. Old frame-directory playback remains for legacy renderer configurations. See [Wilhelm playback](wilhelm_playback.md).
+
 Whisper runs on CPU with int8 and a bounded thread count. Microphone calibration runs once. Both PortAudio and arecord use configurable silence endpointing. Arecord keeps a short pre-roll and the speech interval in memory, starting its maximum phrase duration when speech begins. A failed/empty local transcript does not silently invoke a cloud recognizer by default.
 
 The camera supports Picamera2 and OpenCV. CPU motion detection is throttled and downsampled, with normalized gaze estimates from motion regions. Hailo SDK presence is diagnostic only; HEF loading and accelerator inference are not implemented. The renderer uses cached, immutable small camera previews when enabled.
 
-Pygame uses matching full portrait images, amplitude-derived mouth poses, blinks, subtle drift, and small cached particle sprites. Mouth poses are approximate audio analysis, not a phoneme recognizer. Captions wrap inside the frame. Native rendering defaults to 30 FPS; browser rendering is also capped at 30 FPS. Diagnostic HUD and camera overlay start hidden.
+Legacy Pygame image rendering uses matching portrait images, amplitude-derived mouth poses, blinks, and small cached particle sprites. Mouth poses are approximate audio analysis, not a phoneme recognizer. Captions wrap inside the frame. Native rendering defaults to 30 FPS; browser rendering is also capped at 30 FPS. Diagnostic HUD and camera overlay start hidden.
 
 ## Deployment limits
 

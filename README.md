@@ -53,6 +53,8 @@ Token quotas in `gemini_live` are best-effort application limits, **not a hard s
 
 ## Responsiveness and graphics
 
+Wilhelm's native video playback now uses a scene director and bounded background decoding. Full source actions run at 24 FPS; greeting speech waits for the visitor-facing pose, and the final video frame remains displayed through conversation. Reading/page turns are enabled; the complete prop-changing activity cycle is available in a separate preview while engagement footage is missing. See [playback and asset review](docs/wilhelm_playback.md) for controls, configuration, validation, and remaining assets.
+
 - Generation, synthesis, and playback run as separate stages with bounded queues. Later phrases can be generated and synthesized while the current phrase plays.
 - Whisper defaults to `tiny.en`, int8, and two CPU threads. Silence after speech ends a phrase after approximately 0.5 seconds; the initial listening window is four seconds.
 - Piper keeps its Python voice loaded, primes the greeting, and caches up to 128 utterances. Missing speech models produce an actionable error instead of silently humming.
@@ -86,6 +88,8 @@ python -m unittest discover -s tests
 npm run lint
 npm run build
 python tools/benchmark_renderer.py --headless
+python tools/process_wilhelm_assets.py --check
+python tools/benchmark_scenes.py --headless
 ```
 
 On a headless Linux test machine, set `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy` for Python tests. Run the renderer benchmark without `--headless` on the Pi's actual display for useful deployment measurements.

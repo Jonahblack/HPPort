@@ -1,276 +1,162 @@
 #!/usr/bin/env python3
-"""Non-destructive processing pipeline for Wilhelm character assets.
+"""Validate the entire catalog and atomically publish versioned review artifacts.
 
-Extracts, crops, and normalizes video transitions and idle clips from
-Wilhelm_Generated/ into assets/ without modifying the raw originals.
-Generates pre-decoded frame caches for zero-runtime CPU decoding on Raspberry Pi 5.
-Supports an extensible asset manifest for future graphics.
+Runtime plays original video through a bounded decoder. No old PNG caches or
+accelerated cropped MP4s are consumed. This tool never rewrites source media.
 """
-
-import os
-import sys
+import argparse
+import hashlib
 import json
+import os
+from pathlib import Path
 import shutil
-from typing import Dict, Any, Optional
+import sys
+import tempfile
 
-try:
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from renderer.asset_catalog import load_catalog
+
+
+def fingerprint(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def inspect_clip(spec, output=None):
     import cv2
     import numpy as np
-    HAS_CV2 = True
-except ImportError:
-    HAS_CV2 = False
-
-
-MANIFEST_PATH = "wilhelm_asset_manifest.json"
-
-DEFAULT_MANIFEST: Dict[str, Any] = {
-    "version": "1.0",
-    "source_dir": "Wilhelm_Generated",
-    "target_assets_dir": "assets",
-    "transitions": [
-        {
-            "id": "look_up",
-            "source_file": "look_up_from_book.mp4",
-            "target_file": "transitions/look_up_cropped.mp4",
-            "frames_dir": "transitions/look_up_frames",
-            "start_frame": 78,
-            "end_frame": 138,
-            "target_fps": 30,
-            "description": "Wake transition: Wilhelm raises head from book to greet visitor"
-        },
-        {
-            "id": "return_to_book",
-            "source_file": "return_to_book.mp4",
-            "target_file": "transitions/return_to_book_cropped.mp4",
-            "frames_dir": "transitions/return_to_book_frames",
-            "start_frame": 12,
-            "end_frame": 78,
-            "target_fps": 30,
-            "description": "Dismissal transition: Wilhelm lowers head from visitor back to book"
+    cap = cv2.VideoCapture(spec["path"])
+    try:
+        if not cap.isOpened():
+            raise ValueError(f"Cannot open {spec['path']}")
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if abs(fps - spec["source_fps"]) > 0.05:
+            raise ValueError(f"{spec['id']}: FPS mismatch ({fps})")
+        start, end = spec.get("start_frame", 0), spec.get("end_frame") or total
+        if not 0 <= start < end <= total:
+            raise ValueError(f"{spec['id']}: invalid source range")
+        wanted = set(np.linspace(start, end - 1, 8, dtype=int).tolist())
+        samples = []
+        first = last = None
+        count = 0
+        # Decode sequentially to detect corrupt/truncated media, not only readable endpoints.
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if start <= count < end:
+                if first is None:
+                    first = frame.copy()
+                last = frame
+                if count in wanted:
+                    thumb = cv2.resize(frame, (320, 180))
+                    cv2.putText(thumb, f"{spec['id']} {count / fps:.2f}s", (8, 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+                    samples.append(thumb)
+            count += 1
+        if count != total or first is None or last is None:
+            raise ValueError(f"{spec['id']}: decoded {count} frames, expected {total}")
+        if output is not None:
+            folder = output / spec["id"]
+            folder.mkdir()
+            for name, image in (("first.png", first), ("last.png", last),
+                                ("contact_sheet.jpg", np.concatenate(samples, axis=1))):
+                if not cv2.imwrite(str(folder / name), image):
+                    raise OSError(f"Could not write {folder / name}")
+        return {
+            "id": spec["id"], "source_file": spec["source_file"],
+            "sha256": fingerprint(spec["path"]), "fps": fps, "width": width,
+            "height": height, "source_frames": total, "start_frame": start,
+            "end_frame": end, "playback_seconds": (end - start) / fps,
+            "entry_scene": spec["entry_scene"], "exit_scene": spec["exit_scene"],
+            "runtime_enabled": spec["runtime_enabled"], "review_status": spec["review_status"],
+            "audio": "muted",
         }
-    ],
-    "idles": [
-        {
-            "id": "page_flip",
-            "source_file": "page_flip.mp4",
-            "target_file": "idles/page_flip.mp4",
-            "frames_dir": "idles/page_flip_frames",
-            "loop": True,
-            "description": "Autonomous reading idle: turns a page"
-        },
-        {
-            "id": "tinker_box_study",
-            "source_file": "tinker_box_study.mp4",
-            "target_file": "idles/tinker_box_study.mp4",
-            "frames_dir": "idles/tinker_study_frames",
-            "loop": True,
-            "description": "Autonomous tinkering idle: examines enchanted artifact"
-        },
-        {
-            "id": "get_out_book",
-            "source_file": "get_out_book.mp4",
-            "target_file": "idles/get_out_book.mp4",
-            "frames_dir": "idles/get_out_book_frames",
-            "loop": False,
-            "description": "Activity bridge: sets aside tinker box and gets out book"
-        },
-        {
-            "id": "get_out_tinker_box",
-            "source_file": "get_out_tinker_box.mp4",
-            "target_file": "idles/get_out_tinker_box.mp4",
-            "frames_dir": "idles/get_out_tinker_box_frames",
-            "loop": False,
-            "description": "Activity bridge: transition from empty desk to tinkering box"
+    finally:
+        cap.release()
+
+
+def process(manifest, check_only=False):
+    catalog = load_catalog(manifest)
+    root = Path(catalog["manifest_path"]).parent
+    assets = (root / catalog["target_assets_dir"]).resolve()
+    source = (root / catalog["source_dir"]).resolve()
+    if not assets.is_relative_to(root) or assets == root or assets.is_relative_to(source):
+        raise ValueError("Generated assets must stay in the project and outside source_dir")
+    for still in catalog["stills"]:
+        file = (source / still["source_file"]).resolve()
+        target = (assets / still["target_file"]).resolve()
+        if not file.is_relative_to(source) or not target.is_relative_to(assets) or not file.is_file():
+            raise ValueError(f"Invalid or missing still: {still['source_file']}")
+    if check_only:
+        return {"clips": [inspect_clip(c) for c in catalog["clips"]]}
+    assets.mkdir(parents=True, exist_ok=True)
+    review = assets / "review"
+    review.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="stage-", dir=review) as temporary:
+        stage = Path(temporary)
+        clips = [inspect_clip(c, stage) for c in catalog["clips"]]
+        manifest_hash = fingerprint(catalog["manifest_path"])
+        identity = hashlib.sha256(json.dumps([manifest_hash, clips], sort_keys=True).encode()).hexdigest()[:20]
+        report = {
+            "manifest_sha256": manifest_hash, "revision": identity, "clips": clips,
+            "note": "Technical validation only. Candidate boundaries still require visual review.",
         }
-    ],
-    "stills": [
-        {
-            "source_file": "A01_reading.png",
-            "target_file": "wilhelm_reading.png",
-            "alias_base": True
-        },
-        {
-            "source_file": "end_conversation.png",
-            "target_file": "wilhelm_desk_speaking_neutral.png"
-        },
-        {
-            "source_file": "tinker_box.jpeg",
-            "target_file": "wilhelm_tinker.jpeg"
-        },
-        {
-            "source_file": "wilhelm_master_front.png",
-            "target_file": "wilhelm_master_front.png"
-        },
-        {
-            "source_file": "workshop_master_empty.png",
-            "target_file": "workshop_master_empty.png"
-        }
-    ]
-}
-
-
-def load_manifest(path: str = MANIFEST_PATH) -> Dict[str, Any]:
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return DEFAULT_MANIFEST
-
-
-def save_manifest(manifest: Dict[str, Any], path: str = MANIFEST_PATH) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
-    print(f"[Manifest] Saved asset manifest to {path}")
-
-
-def process_stills(manifest: Dict[str, Any]) -> None:
-    source_dir = manifest.get("source_dir", "Wilhelm_Generated")
-    target_dir = manifest.get("target_assets_dir", "assets")
-    os.makedirs(target_dir, exist_ok=True)
-
-    for item in manifest.get("stills", []):
-        src = os.path.join(source_dir, item["source_file"])
-        dest = os.path.join(target_dir, item["target_file"])
-        if os.path.exists(src):
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            shutil.copy2(src, dest)
-            print(f"[Stills] Copied: {src} -> {dest}")
-            if item.get("alias_base"):
-                base_dest = os.path.join(target_dir, "base.png")
-                shutil.copy2(src, base_dest)
-                print(f"[Stills] Aliased to default sprite: {dest} -> {base_dest}")
-        else:
-            print(f"[Stills] Warning: Source still '{src}' not found. Skipping.")
-
-
-def crop_video_frames(
-    src_path: str,
-    dest_video_path: str,
-    dest_frames_dir: str,
-    start_frame: int,
-    end_frame: int,
-    target_fps: int = 30
-) -> int:
-    if not HAS_CV2:
-        print(f"[Video] OpenCV not installed. Cannot crop '{src_path}'.")
-        return 0
-
-    if not os.path.exists(src_path):
-        print(f"[Video] Source video '{src_path}' not found.")
-        return 0
-
-    cap = cv2.VideoCapture(src_path)
-    if not cap.isOpened():
-        print(f"[Video] Failed to open '{src_path}'.")
-        return 0
-
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    source_fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    start = max(0, min(start_frame, total_frames - 1))
-    end = max(start + 1, min(end_frame, total_frames))
-    expected_frames = end - start
-
-    os.makedirs(os.path.dirname(dest_video_path), exist_ok=True)
-    os.makedirs(dest_frames_dir, exist_ok=True)
-
-    # Initialize video writer for cropped copy
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(dest_video_path, fourcc, target_fps, (width, height))
-
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start)
-    saved_count = 0
-
-    for f_idx in range(start, end):
-        ret, frame = cap.read()
-        if not ret:
-            break
-        writer.write(frame)
-        frame_name = f"frame_{saved_count:03d}.png"
-        frame_path = os.path.join(dest_frames_dir, frame_name)
-        cv2.imwrite(frame_path, frame)
-        saved_count += 1
-
-    writer.release()
-    cap.release()
-
-    print(
-        f"[Video] Cropped '{os.path.basename(src_path)}' ({start}..{end}) -> "
-        f"{saved_count} frames saved to '{dest_frames_dir}' & '{dest_video_path}' @ {target_fps}fps"
-    )
-    return saved_count
-
-
-def copy_or_cache_idles(manifest: Dict[str, Any]) -> None:
-    source_dir = manifest.get("source_dir", "Wilhelm_Generated")
-    target_dir = manifest.get("target_assets_dir", "assets")
-
-    for idle in manifest.get("idles", []):
-        src = os.path.join(source_dir, idle["source_file"])
-        dest = os.path.join(target_dir, idle["target_file"])
-        frames_dir = os.path.join(target_dir, idle["frames_dir"])
-
-        if not os.path.exists(src):
-            print(f"[Idle] Source '{src}' not found. Skipping.")
-            continue
-
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        shutil.copy2(src, dest)
-        print(f"[Idle] Copied idle clip: {src} -> {dest}")
-
-        if HAS_CV2 and idle.get("extract_frames"):
-            os.makedirs(frames_dir, exist_ok=True)
-            cap = cv2.VideoCapture(src)
-            f_count = 0
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                frame_path = os.path.join(frames_dir, f"frame_{f_count:03d}.png")
-                cv2.imwrite(frame_path, frame)
-                f_count += 1
-            cap.release()
-            print(f"[Idle] Extracted {f_count} frames for '{idle['id']}' to '{frames_dir}'")
-
-
-def process_transitions(manifest: Dict[str, Any]) -> None:
-    source_dir = manifest.get("source_dir", "Wilhelm_Generated")
-    target_dir = manifest.get("target_assets_dir", "assets")
-
-    for trans in manifest.get("transitions", []):
-        src = os.path.join(source_dir, trans["source_file"])
-        dest_video = os.path.join(target_dir, trans["target_file"])
-        dest_frames = os.path.join(target_dir, trans["frames_dir"])
-
-        crop_video_frames(
-            src_path=src,
-            dest_video_path=dest_video,
-            dest_frames_dir=dest_frames,
-            start_frame=trans["start_frame"],
-            end_frame=trans["end_frame"],
-            target_fps=trans.get("target_fps", 30)
-        )
+        (stage / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        rows = ["# Wilhelm asset review", "", report["note"], "",
+                "| Clip | Source FPS | Playback seconds | Runtime | Review status |",
+                "| --- | --- | --- | --- | --- |"]
+        for clip in clips:
+            rows.append(f"| {clip['id']} | {clip['fps']} | {clip['playback_seconds']:.2f} | {clip['runtime_enabled']} | {clip['review_status']} |")
+        rows.extend(["", "Inspect each clip's first.png, last.png, and contact_sheet.jpg alongside its neighbors."])
+        (stage / "report.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        destination = review / identity
+        if not destination.exists():
+            os.replace(stage, destination)
+        # Still copies are individually atomic and are never used to fabricate video endpoints.
+        for still in catalog["stills"]:
+            target = assets / still["target_file"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(dir=target.parent, suffix=target.suffix)
+            os.close(fd)
+            try:
+                shutil.copyfile(source / still["source_file"], name)
+                os.replace(name, target)
+            finally:
+                if os.path.exists(name):
+                    os.unlink(name)
+        # Publish the complete report pointer only after every clip and still succeeded.
+        fd, name = tempfile.mkstemp(dir=assets, suffix=".json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump({"revision": identity, "report": f"review/{identity}/report.json",
+                           "manifest_sha256": manifest_hash}, stream, indent=2)
+            os.replace(name, assets / "scene_catalog.json")
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
+        print(f"Review artifacts: {destination}")
+        return report
 
 
 def main():
-    print("=" * 60)
-    print("Wilhelm Asset Processing & Non-Destructive Ingestion Engine")
-    print("=" * 60)
-    manifest = load_manifest()
-    save_manifest(manifest)
-
-    print("\n1. Copying and registering master stills...")
-    process_stills(manifest)
-
-    print("\n2. Processing non-destructive transition crops and frame caches...")
-    process_transitions(manifest)
-
-    print("\n3. Ingesting autonomous idle video loops...")
-    copy_or_cache_idles(manifest)
-
-    print("\n[Complete] Asset ingestion finished successfully.")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", default=str(Path(__file__).resolve().parents[1] / "wilhelm_asset_manifest.json"))
+    parser.add_argument("--check", action="store_true", help="Fully validate without writing assets")
+    args = parser.parse_args()
+    try:
+        report = process(args.manifest, args.check)
+    except Exception as exc:
+        print(f"Asset processing failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"Validated {len(report['clips'])} clips at native speed. Embedded audio stays muted.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -1,6 +1,7 @@
 """Configuration loader and schema definition for Talking Portrait."""
 
 import json
+import math
 import os
 import argparse
 from copy import deepcopy
@@ -184,6 +185,32 @@ def load_config(config_path: str = "portrait_config.json", demo_mode: bool = Fal
             value = config[section][key]
             if isinstance(value, bool) or not isinstance(value, (float, int)) or value <= 0:
                 raise ValueError(f"{section}.{key} must be a positive number")
+
+    renderer = config["renderer"]
+    base_dir = os.path.dirname(os.path.abspath(config_path))
+    if not os.path.isabs(renderer["assets_dir"]):
+        renderer["assets_dir"] = os.path.join(base_dir, renderer["assets_dir"])
+    scene = renderer.get("scene_director", {})
+    if not isinstance(scene, dict):
+        raise ValueError("renderer.scene_director must be an object")
+    if scene.get("enabled"):
+        manifest = scene.get("manifest", "wilhelm_asset_manifest.json")
+        scene["manifest"] = manifest if os.path.isabs(manifest) else os.path.join(base_dir, manifest)
+        for key, default, minimum in (("video_memory_mb", 64, 1), ("decode_width", 960, 16),
+                                      ("action_interval_min", 30, 1), ("action_interval_max", 65, 1),
+                                      ("activity_interval_min", 180, 1), ("activity_interval_max", 420, 1)):
+            value = scene.get(key, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < minimum:
+                raise ValueError(f"renderer.scene_director.{key} must be >= {minimum}")
+        for key in ("opencv_threads", "preparation_timeout_seconds"):
+            value = scene.get(key, 1 if key == "opencv_threads" else 15)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"renderer.scene_director.{key} must be positive")
+        if renderer.get("scene_fit", "contain") not in ("contain", "cover"):
+            raise ValueError("renderer.scene_fit must be contain or cover")
+        activities = scene.get("activities", ["reading", "tinkering"])
+        if not isinstance(activities, list) or not all(isinstance(name, str) for name in activities):
+            raise ValueError("renderer.scene_director.activities must be a list of scene names")
 
     return config
 

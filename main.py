@@ -40,6 +40,9 @@ class TalkingPortraitApp:
         self._stop = threading.Event()
         self._events = queue.SimpleQueue()
         self._turn_id = 0
+        self._pending_greeting = None
+        self._pending_text = None
+        self._greeting_playing = False
         self._listen_thread = None
         self.current_audio_thread = None
         self._warmup_thread = None
@@ -65,6 +68,8 @@ class TalkingPortraitApp:
     def _post(self, callback, *args):
         if self.running:
             self._events.put((callback, args))
+            return True
+        return False
 
     def _drain_events(self):
         # All FSM transitions and their side effects run on the display thread.
@@ -83,12 +88,17 @@ class TalkingPortraitApp:
     def _on_state_change(self, new_state):
         self.renderer.set_state(new_state)
         if new_state == PortraitState.GREETING:
-            self._speak_phrase(self.config["llm"]["greeting_prompt"], self.fsm.on_greeting_complete)
+            self._turn_id += 1
+            self._prepare_greeting(self.config["llm"]["greeting_prompt"])
         elif new_state == PortraitState.LISTENING:
             self.renderer.set_subtitle("I'm listening...")
             self._ensure_listener()
         elif new_state in (PortraitState.IDLE, PortraitState.COOLDOWN):
             self._turn_id += 1
+            prepared = getattr(self, "_pending_greeting", None)
+            self._pending_greeting = self._pending_text = None
+            if prepared:
+                self._discard_prepared(prepared)
             self.conversation_history.clear()
             self.renderer.set_subtitle("" if new_state == PortraitState.IDLE else "Until our next adventure...")
             self.renderer.set_viseme("X", amplitude=0.0)
@@ -96,7 +106,7 @@ class TalkingPortraitApp:
             self._update_safeguard_hud()
 
     def _ensure_listener(self):
-        if not self.running or self.is_listening_active or self.fsm.state != PortraitState.LISTENING:
+        if not self.running or self.is_listening_active or self.fsm.state != PortraitState.LISTENING or not self.renderer.is_scene_ready():
             return
         self.is_listening_active = True
         self._listen_thread = threading.Thread(target=self._listen_worker, args=(self._turn_id,), daemon=True, name="portrait-listen")
@@ -130,7 +140,56 @@ class TalkingPortraitApp:
             return
         self._turn_id += 1
         self.fsm.on_speech_detected()
-        self._generate_and_speak(text, stt_duration)
+        if self.renderer.is_scene_ready():
+            self._generate_and_speak(text, stt_duration)
+        else:
+            self._pending_text = (self._turn_id, text, stt_duration)
+
+    def _service_scene(self):
+        """Called on the display thread after director events, before admitting speech."""
+        error = self.renderer.scene_error()
+        if error and self.fsm.state in (PortraitState.GREETING, PortraitState.THINKING):
+            self._turn_failed(self._turn_id, error)
+            return
+        if not self.renderer.is_scene_ready():
+            return
+        prepared = getattr(self, "_pending_greeting", None)
+        if prepared is not None and self.fsm.state == PortraitState.GREETING and not self._greeting_playing:
+            self._pending_greeting = None
+            self._greeting_playing = True
+            turn_id = self._turn_id
+
+            def play_greeting():
+                try:
+                    if turn_id == self._turn_id and not self._stop.is_set():
+                        self._play_prepared(prepared)
+                        self._post(self._greeting_finished, turn_id)
+                except Exception as exc:
+                    self._post(self._turn_failed, turn_id, exc)
+                finally:
+                    self._discard_prepared(prepared)
+
+            self.current_audio_thread = threading.Thread(target=play_greeting, daemon=True, name="portrait-greeting-play")
+            self.current_audio_thread.start()
+        pending = getattr(self, "_pending_text", None)
+        if pending and self.fsm.state == PortraitState.THINKING:
+            self._pending_text = None
+            turn_id, text, duration = pending
+            if turn_id == self._turn_id:
+                self._generate_and_speak(text, duration)
+
+    def _accept_greeting(self, turn_id, prepared):
+        if not self.running or turn_id != self._turn_id or self.fsm.state != PortraitState.GREETING:
+            self._discard_prepared(prepared)
+            return
+        self._pending_greeting = prepared
+
+    def _greeting_finished(self, turn_id):
+        if turn_id != self._turn_id or self.fsm.state != PortraitState.GREETING:
+            return
+        self._greeting_playing = False
+        if self.renderer.is_scene_ready():
+            self.fsm.on_greeting_complete()
 
     def _begin_speaking(self, turn_id):
         if turn_id == self._turn_id:
@@ -370,21 +429,18 @@ class TalkingPortraitApp:
         # Never repeat a partially audible response through the fallback model.
         return "".join(transcripts).strip() if received else None
 
-    def _speak_phrase_blocking(self, text):
-        prepared = self._prepare_phrase(text)
-        try:
-            self._play_prepared(prepared)
-        finally:
-            self._discard_prepared(prepared)
-
-    def _speak_phrase(self, text, on_complete=None):
+    def _prepare_greeting(self, text):
+        """Prepare greeting off-thread; the scene service admits its playback later."""
         turn_id = self._turn_id
+        self._greeting_playing = False
 
         def worker():
             try:
-                self._speak_phrase_blocking(text)
-                if on_complete:
-                    self._post(on_complete)
+                prepared = self._prepare_phrase(text)
+                if self._stop.is_set() or not self.running:
+                    self._discard_prepared(prepared)
+                elif not self._post(self._accept_greeting, turn_id, prepared):
+                    self._discard_prepared(prepared)
             except Exception as exc:
                 self._post(self._turn_failed, turn_id, exc)
 
@@ -448,7 +504,9 @@ class TalkingPortraitApp:
                     frame = self.vision.get_latest_frame(target_size=(200, 150)) if self.renderer.show_camera_pip else None
                     self.renderer.update_camera_frame(frame, self.vision.get_status_info())
                     last_vision_poll = now
-                self.fsm.update()
+                self.renderer.update_scene()
+                self._service_scene()
+                self.fsm.update(visual_ready=self.renderer.is_scene_settled())
                 self.renderer.render()
         finally:
             self.cleanup()
@@ -462,6 +520,18 @@ class TalkingPortraitApp:
         for thread in (self.current_audio_thread, self._listen_thread, self._warmup_thread):
             if thread and thread is not threading.current_thread():
                 thread.join(timeout=1.0)
+        prepared = getattr(self, "_pending_greeting", None)
+        self._pending_greeting = None
+        if prepared:
+            self._discard_prepared(prepared)
+        # Dispose synthesis results already queued before shutdown, without running FSM events.
+        while True:
+            try:
+                callback, args = self._events.get_nowait()
+            except queue.Empty:
+                break
+            if callback == self._accept_greeting:
+                self._discard_prepared(args[1])
         for component in (self.stt, self.llm, self.live_client, self.tts):
             close = getattr(component, "close", None)
             if close:

@@ -12,3 +12,5 @@ dist/
 cache/
 *.log
 token_usage.json*
+assets/review/
+assets/scene_catalog.json

@@ -1,65 +1,219 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "source_dir": "Wilhelm_Generated",
   "target_assets_dir": "assets",
-  "transitions": [
+  "initial_scene": "reading",
+  "canvas_size": [1280, 720],
+  "review_note": "Full-length core clips are implementation candidates. Final visual approval and Pi measurements remain required. Preview routes stay disabled in visitor operation.",
+  "scenes": {
+    "reading": {
+      "activity": "reading",
+      "sprite": "wilhelm_reading",
+      "book": "open",
+      "box": "absent",
+      "pose": "reading",
+      "engagement_scene": "engaged_book"
+    },
+    "engaged_book": {
+      "activity": "reading",
+      "return_scene": "reading",
+      "sprite": "speaking_base",
+      "book": "open",
+      "box": "absent",
+      "pose": "visitor_facing",
+      "engagement_scene": "engaged_book"
+    },
+    "neutral": {
+      "activity": "neutral",
+      "sprite": "wilhelm_neutral",
+      "book": "absent",
+      "box": "absent",
+      "pose": "neutral_desk",
+      "engagement_scene": "engaged_neutral"
+    },
+    "tinkering": {
+      "activity": "tinkering",
+      "sprite": "wilhelm_tinker",
+      "book": "absent",
+      "box": "present",
+      "pose": "studying_box",
+      "engagement_scene": "engaged_tinker"
+    },
+    "engaged_neutral": {
+      "activity": "neutral",
+      "sprite": "wilhelm_neutral",
+      "book": "absent",
+      "box": "absent",
+      "pose": "visitor_facing"
+    },
+    "engaged_tinker": {
+      "activity": "tinkering",
+      "sprite": "wilhelm_tinker",
+      "book": "absent",
+      "box": "present",
+      "pose": "visitor_facing"
+    }
+  },
+  "clips": [
     {
       "id": "look_up",
       "source_file": "look_up_from_book.mp4",
-      "target_file": "transitions/look_up_cropped.mp4",
-      "frames_dir": "transitions/look_up_frames",
-      "start_frame": 78,
-      "end_frame": 138,
-      "target_fps": 30,
-      "description": "Wake transition: Wilhelm raises head from book to greet visitor"
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "reading",
+      "exit_scene": "engaged_book",
+      "category": "transition",
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Full look-up with anticipation and settled endpoint."
     },
     {
       "id": "return_to_book",
       "source_file": "return_to_book.mp4",
-      "target_file": "transitions/return_to_book_cropped.mp4",
-      "frames_dir": "transitions/return_to_book_frames",
-      "start_frame": 12,
-      "end_frame": 78,
-      "target_fps": 30,
-      "description": "Dismissal transition: Wilhelm lowers head from visitor back to book"
-    }
-  ],
-  "idles": [
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "engaged_book",
+      "exit_scene": "reading",
+      "category": "transition",
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Full return to reading. Retain the actual last frame."
+    },
     {
       "id": "page_flip",
       "source_file": "page_flip.mp4",
-      "target_file": "idles/page_flip.mp4",
-      "frames_dir": "idles/page_flip_frames",
-      "loop": true,
-      "description": "Autonomous reading idle: turns a page",
-      "extract_frames": true
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "reading",
+      "exit_scene": "reading",
+      "category": "activity_action",
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Occasional complete page turn; not a continuous loop."
     },
     {
       "id": "tinker_box_study",
       "source_file": "tinker_box_study.mp4",
-      "target_file": "idles/tinker_box_study.mp4",
-      "frames_dir": "idles/tinker_study_frames",
-      "loop": true,
-      "description": "Autonomous tinkering idle: examines enchanted artifact",
-      "extract_frames": true
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "tinkering",
+      "exit_scene": "tinkering",
+      "category": "activity_action",
+      "runtime_enabled": false,
+      "review_status": "preview",
+      "crossfade_ms": 0,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Preview until engagement footage and boundary review are complete."
     },
     {
       "id": "get_out_book",
       "source_file": "get_out_book.mp4",
-      "target_file": "idles/get_out_book.mp4",
-      "frames_dir": "idles/get_out_book_frames",
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "neutral",
+      "exit_scene": "reading",
+      "category": "transition",
+      "runtime_enabled": false,
+      "review_status": "preview",
+      "crossfade_ms": 0,
+      "audio": "muted",
+      "face_motion": "baked_in",
       "loop": false,
-      "description": "Activity bridge: sets aside tinker box and gets out book",
-      "extract_frames": true
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Neutral desk to reading; not a direct tinkering-to-reading bridge."
     },
     {
       "id": "get_out_tinker_box",
       "source_file": "get_out_tinker_box.mp4",
-      "target_file": "idles/get_out_tinker_box.mp4",
-      "frames_dir": "idles/get_out_tinker_box_frames",
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "neutral",
+      "exit_scene": "tinkering",
+      "category": "transition",
+      "runtime_enabled": false,
+      "review_status": "preview",
+      "crossfade_ms": 0,
+      "audio": "muted",
+      "face_motion": "baked_in",
       "loop": false,
-      "description": "Activity bridge: transition from empty desk to tinkering box",
-      "extract_frames": true
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Retrieve box from neutral desk."
+    },
+    {
+      "id": "put_away_book",
+      "source_file": "put_away_book.mp4",
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "reading",
+      "exit_scene": "neutral",
+      "category": "transition",
+      "runtime_enabled": false,
+      "review_status": "preview",
+      "crossfade_ms": 0,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Close and remove book, then settle."
+    },
+    {
+      "id": "put_away_tinker",
+      "source_file": "put_away_tinker.mp4",
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "tinkering",
+      "exit_scene": "neutral",
+      "category": "transition",
+      "runtime_enabled": false,
+      "review_status": "preview",
+      "crossfade_ms": 0,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Close and remove box, then settle."
     }
   ],
   "stills": [
@@ -71,6 +225,10 @@
     {
       "source_file": "end_conversation.png",
       "target_file": "wilhelm_desk_speaking_neutral.png"
+    },
+    {
+      "source_file": "natural_state.jpeg",
+      "target_file": "wilhelm_neutral.jpeg"
     },
     {
       "source_file": "tinker_box.jpeg",
