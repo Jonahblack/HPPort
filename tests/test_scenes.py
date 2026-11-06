@@ -116,22 +116,31 @@ class TestSceneDirector(unittest.TestCase):
         d.update()
         self.assertEqual(self.player.played[-1], "return_to_book")
 
-    def test_tinkering_is_preview_only_and_no_indirect_greeting_detour_exists(self):
+    def test_tinkering_is_runtime_enabled_and_engages_via_tinker_look_up(self):
         d = self.director
-        self.assertFalse(d.request_action("get_out_tinker_box"))
-        d = SceneDirector(copy.deepcopy(self.catalog), FakePlayer(), preview=True)
         self.assertTrue(d.request_action("get_out_tinker_box"))
         d.update()
         self.assertEqual(d.player.played, ["put_away_book"])
         d.player.finish()
         d.update()
+        self.assertEqual(d.player.played, ["put_away_book", "get_out_tinker_box"])
         d.player.finish()
         d.update()
         self.assertEqual(d.scene, "tinkering")
         d.request_engagement()
         d.update()
-        self.assertIn("No enabled route", d.error)
-        self.assertNotIn("get_out_book", d.player.played)
+        self.assertEqual(d.player.played[-1], "look_up_from_tinker_box")
+        d.player.finish()
+        d.update()
+        self.assertEqual(d.scene, "engaged_tinker")
+        self.assertTrue(d.ready_for_speech)
+        d.request_return()
+        d.update()
+        self.assertEqual(d.player.played[-1], "return_to_tinker")
+        d.player.finish()
+        d.update()
+        self.assertEqual(d.scene, "tinkering")
+        self.assertFalse(d.ready_for_speech)
 
     def test_decode_failure_cannot_commit_an_unseen_prop_change(self):
         d = self.director
@@ -153,25 +162,20 @@ class TestSceneDirector(unittest.TestCase):
         d.update(idle=True)
         self.assertEqual(self.player.played, ["page_flip"])
 
-    def test_autonomous_activity_change_requires_engagement_and_return_routes(self):
+    def test_autonomous_activity_change_routes_between_reading_and_tinkering(self):
         d = self.director
-        d.next_activity = -1
-        d.update(idle=True)
-        self.assertIsNone(d.target)
-        # Once future authored routes exist, the scheduler can admit that activity.
-        for clip in d.clips.values():
-            clip["runtime_enabled"] = True
-        for name, entry, exit in (("engage_tinker", "tinkering", "engaged_tinker"),
-                                  ("resume_tinker", "engaged_tinker", "tinkering")):
-            clip = {"id": name, "entry_scene": entry, "exit_scene": exit, "runtime_enabled": True}
-            d.clips[name] = clip
-            self.player.register_video(clip)
         d.next_activity = -1
         d.update(idle=True)
         self.assertEqual(d.target, "tinkering")
         d.update(idle=True)
-        self.assertEqual(self.player.played, ["put_away_book"])
+        self.assertEqual(d.player.played, ["put_away_book"])
 
+    def test_activity_without_engagement_routes_is_rejected_by_scheduler(self):
+        d = self.director
+        d.clips["look_up_from_tinker_box"]["runtime_enabled"] = False
+        d.next_activity = -1
+        d.update(idle=True)
+        self.assertIsNone(d.target)
 
 class MemoryDecoder:
     def __init__(self, spec, memory_bytes, max_width):

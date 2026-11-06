@@ -23,21 +23,25 @@ def main():
     config["renderer"]["fullscreen"] = args.fullscreen
     renderer = PortraitRenderer(config)
     ids = ("page_flip", "tinker_box_study", "get_out_book", "get_out_tinker_box",
-           "look_up", "return_to_book", "put_away_book", "put_away_tinker")
+           "look_up", "return_to_book", "put_away_book", "put_away_tinker",
+           "look_up_from_tinker_box", "return_to_tinker")
     cycle = iter(("page_flip", "put_away_book", "get_out_tinker_box", "tinker_box_study",
+                  "look_up_from_tinker_box", "return_to_tinker",
                   "put_away_tinker", "get_out_book")) if args.cycle else iter(())
     pending = next(cycle, None)
     running = True
     try:
-        print("1-8 select actions; compatible entry routes play first. I: diagnostics, Esc: quit.")
+        print("1-0 select actions; compatible entry routes play first. I: diagnostics, Esc: quit.")
         while running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q)):
                     running = False
                 elif event.type == pygame.KEYDOWN:
-                    if pygame.K_1 <= event.key <= pygame.K_8:
+                    if (pygame.K_1 <= event.key <= pygame.K_9) or event.key == pygame.K_0:
                         pending = None
-                        renderer.trigger_animation(ids[event.key - pygame.K_1])
+                        idx = 9 if event.key == pygame.K_0 else (event.key - pygame.K_1)
+                        if idx < len(ids):
+                            renderer.trigger_animation(ids[idx])
                     elif event.key == pygame.K_i:
                         renderer.toggle_anim_debug_hud()
             if not running:

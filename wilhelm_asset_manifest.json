@@ -4,7 +4,7 @@
   "target_assets_dir": "assets",
   "initial_scene": "reading",
   "canvas_size": [1280, 720],
-  "review_note": "Full-length core clips are implementation candidates. Final visual approval and Pi measurements remain required. Preview routes stay disabled in visitor operation.",
+  "review_note": "Core reading and tinkering clips are implementation candidates. Final visual approval and Pi measurements remain required.",
   "scenes": {
     "reading": {
       "activity": "reading",
@@ -25,11 +25,12 @@
     },
     "neutral": {
       "activity": "neutral",
+      "return_scene": "reading",
       "sprite": "wilhelm_neutral",
       "book": "absent",
       "box": "absent",
       "pose": "neutral_desk",
-      "engagement_scene": "engaged_neutral"
+      "engagement_scene": "engaged_book"
     },
     "tinkering": {
       "activity": "tinkering",
@@ -48,10 +49,12 @@
     },
     "engaged_tinker": {
       "activity": "tinkering",
-      "sprite": "wilhelm_tinker",
+      "return_scene": "tinkering",
+      "sprite": "wilhelm_engaged_tinker",
       "book": "absent",
       "box": "present",
-      "pose": "visitor_facing"
+      "pose": "visitor_facing",
+      "engagement_scene": "engaged_tinker"
     }
   },
   "clips": [
@@ -124,16 +127,16 @@
       "entry_scene": "tinkering",
       "exit_scene": "tinkering",
       "category": "activity_action",
-      "runtime_enabled": false,
-      "review_status": "preview",
-      "crossfade_ms": 0,
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
       "audio": "muted",
       "face_motion": "baked_in",
       "loop": false,
       "checkpoints": [
         "source_end"
       ],
-      "description": "Preview until engagement footage and boundary review are complete."
+      "description": "Tinkering action studying the box."
     },
     {
       "id": "get_out_book",
@@ -144,16 +147,16 @@
       "entry_scene": "neutral",
       "exit_scene": "reading",
       "category": "transition",
-      "runtime_enabled": false,
-      "review_status": "preview",
-      "crossfade_ms": 0,
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
       "audio": "muted",
       "face_motion": "baked_in",
       "loop": false,
       "checkpoints": [
         "source_end"
       ],
-      "description": "Neutral desk to reading; not a direct tinkering-to-reading bridge."
+      "description": "Neutral desk to reading; retrieve and open book."
     },
     {
       "id": "get_out_tinker_box",
@@ -164,9 +167,9 @@
       "entry_scene": "neutral",
       "exit_scene": "tinkering",
       "category": "transition",
-      "runtime_enabled": false,
-      "review_status": "preview",
-      "crossfade_ms": 0,
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
       "audio": "muted",
       "face_motion": "baked_in",
       "loop": false,
@@ -184,16 +187,16 @@
       "entry_scene": "reading",
       "exit_scene": "neutral",
       "category": "transition",
-      "runtime_enabled": false,
-      "review_status": "preview",
-      "crossfade_ms": 0,
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
       "audio": "muted",
       "face_motion": "baked_in",
       "loop": false,
       "checkpoints": [
         "source_end"
       ],
-      "description": "Close and remove book, then settle."
+      "description": "Close and remove book, then settle to neutral desk."
     },
     {
       "id": "put_away_tinker",
@@ -204,16 +207,56 @@
       "entry_scene": "tinkering",
       "exit_scene": "neutral",
       "category": "transition",
-      "runtime_enabled": false,
-      "review_status": "preview",
-      "crossfade_ms": 0,
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
       "audio": "muted",
       "face_motion": "baked_in",
       "loop": false,
       "checkpoints": [
         "source_end"
       ],
-      "description": "Close and remove box, then settle."
+      "description": "Close and remove box, then settle to neutral desk."
+    },
+    {
+      "id": "look_up_from_tinker_box",
+      "source_file": "look_up_from_tinker_box.mp4",
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "tinkering",
+      "exit_scene": "engaged_tinker",
+      "category": "transition",
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Look up from tinker box to visitor-facing posture."
+    },
+    {
+      "id": "return_to_tinker",
+      "source_file": "return_to_tinker.mp4",
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "engaged_tinker",
+      "exit_scene": "tinkering",
+      "category": "transition",
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Return from visitor-facing posture to studying tinker box."
     }
   ],
   "stills": [
@@ -233,6 +276,10 @@
     {
       "source_file": "tinker_box.jpeg",
       "target_file": "wilhelm_tinker.jpeg"
+    },
+    {
+      "source_file": "attention_tinker_box.png",
+      "target_file": "wilhelm_engaged_tinker.png"
     },
     {
       "source_file": "wilhelm_master_front.png",

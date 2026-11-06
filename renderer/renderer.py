@@ -160,6 +160,7 @@ class PortraitRenderer:
                 "speaking_base": ["wilhelm_desk_speaking_neutral.png", "end_conversation.png", "base.png"],
                 "wilhelm_reading": ["wilhelm_reading.png", "A01_reading.png"],
                 "wilhelm_tinker": ["wilhelm_tinker.jpeg", "tinker_box.jpeg"],
+                "wilhelm_engaged_tinker": ["wilhelm_engaged_tinker.png", "attention_tinker_box.png"],
                 "wilhelm_neutral": ["wilhelm_neutral.jpeg", "natural_state.jpeg"],
                 "eyes_half": ["wilhelm_desk_eyes_half.png", "forest_warrior_blink_half.png", "eyes_half.png"],
                 "eyes_closed": ["wilhelm_desk_eyes_closed.png", "forest_warrior_blink.png", "eyes_closed.png"],
@@ -487,8 +488,8 @@ class PortraitRenderer:
             or self.sprites.get("base")
         )
 
-        incoming = active_idle if anim_id in ("return_to_book", "page_flip", "tinker_box_study", "get_out_book", "get_out_tinker_box") else speaking_base
-        outgoing = active_idle if anim_id != "return_to_book" else speaking_base
+        incoming = active_idle if anim_id in ("return_to_book", "page_flip", "tinker_box_study", "get_out_book", "get_out_tinker_box", "put_away_book", "put_away_tinker", "return_to_tinker", "return_to_tinker_box") else speaking_base
+        outgoing = active_idle if anim_id not in ("return_to_book", "return_to_tinker", "return_to_tinker_box") else speaking_base
 
         if force and self.transition_player.is_locked:
             self.transition_player.unlock()
@@ -962,7 +963,7 @@ class PortraitRenderer:
         # 6.5. Idle Animation Debug Controls HUD (Hotkey [I] to toggle)
         if getattr(self, "show_anim_debug_hud", False):
             anim_hud_w = 420
-            anim_hud_h = 270
+            anim_hud_h = 336
             anim_hud_x = frame_margin_x + 24
             anim_hud_y = frame_margin_y + 24 + (188 if self.show_debug_hud else 0)
 
@@ -986,10 +987,14 @@ class PortraitRenderer:
                 ("Hotkeys:", (180, 200, 220)),
                 ("  [1] page_flip          (240f - Page Turn Idle)", (200, 220, 240)),
                 ("  [2] tinker_box_study   (240f - Tinker Box Idle)", (200, 220, 240)),
-                ("  [3] get_out_book       (240f - Get Out Book Idle)", (200, 220, 240)),
+                ("  [3] get_out_book       (240f - Get Out Book)", (200, 220, 240)),
                 ("  [4] get_out_tinker_box (240f - Get Out Tinker Box)", (200, 220, 240)),
-                ("  [5] look_up            (complete source action)", (200, 220, 240)),
-                ("  [6] return_to_book     (complete source action)", (200, 220, 240)),
+                ("  [5] look_up            (240f - Book -> Engaged)", (200, 220, 240)),
+                ("  [6] return_to_book     (240f - Engaged -> Book)", (200, 220, 240)),
+                ("  [7] put_away_book      (240f - Book -> Neutral)", (200, 220, 240)),
+                ("  [8] put_away_tinker    (240f - Tinker -> Neutral)", (200, 220, 240)),
+                ("  [9] look_up_tinker     (240f - Tinker -> Engaged)", (200, 220, 240)),
+                ("  [0] return_to_tinker   (240f - Engaged -> Tinker)", (200, 220, 240)),
                 ("  [I] Toggle this HUD", (150, 160, 170)),
             ]
 
@@ -1007,7 +1012,7 @@ class PortraitRenderer:
                 self.screen.blit(surf, (anim_hud_x + 10, anim_hud_y + y_offset))
 
         # 7. Hotkey Controls Help Bar at very bottom
-        help_text = "[SPACE] Wake | [T] Talk | [1-6] Play Anim | [I] Anim HUD | [C] Cam | [H] Info | [ESC] Quit"
+        help_text = "[SPACE] Wake | [T] Talk | [1-0] Play Anim | [I] Anim HUD | [C] Cam | [H] Info | [ESC] Quit"
         help_surf = self._text(self.hud_font, help_text, (130, 120, 100))
         self.screen.blit(help_surf, (center_x - help_surf.get_width() // 2, h - 22))
 

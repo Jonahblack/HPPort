@@ -29,7 +29,9 @@ class SceneDirector:
         for spec in self.clips.values():
             if spec.get("available", True):
                 player.register_video(spec)
-        player.prepare("look_up")
+        eng = self.catalog["scenes"].get(self.scene, {}).get("engagement_scene")
+        route = self._route(self.scene, eng) if eng else None
+        player.prepare(route[0] if route else "look_up")
 
     def _schedule_idle(self):
         low = max(1, float(self.config.get("action_interval_min", 30)))
@@ -83,6 +85,10 @@ class SceneDirector:
         self.error = None
 
     def request_action(self, name):
+        if name not in self.clips:
+            alias = {"return_to_tinker_box": "return_to_tinker", "look_up_tinker": "look_up_from_tinker_box"}.get(name)
+            if alias in self.clips:
+                name = alias
         spec = self.clips.get(name)
         if self.engaging or self.active or not spec or not self._enabled(spec):
             return False
@@ -171,7 +177,9 @@ class SceneDirector:
                 self.target = random.choice(candidates)
                 return
         if self.clock() < self.next_idle:
-            self.player.prepare("look_up")
+            eng = self.catalog["scenes"].get(self.scene, {}).get("engagement_scene")
+            route = self._route(self.scene, eng) if eng else None
+            self.player.prepare(route[0] if route else "look_up")
             return
         choices = [c["id"] for c in self.clips.values() if self._enabled(c) and c.get("category") in ("activity_action", "resting_loop") and c["entry_scene"] == self.scene and c["exit_scene"] == self.scene]
         alternatives = [name for name in choices if name != self._last_action]

@@ -5,6 +5,8 @@ The native Python application now plays the original videos through a bounded ba
 ## What runs now
 
 - Full-length 24 FPS look-up and return-to-book clips, including anticipation and settling.
+- Full-length 24 FPS look-up from tinker box and return-to-tinker clips, connecting the tinkering activity directly to visitor engagement.
+- Autonomous activity switching between reading and tinkering via neutral desk transitions (`put_away_book`, `get_out_tinker_box`, `put_away_tinker`, `get_out_book`).
 - Occasional complete page turns, scheduled 30-65 seconds after an action or interaction settles.
 - Greeting synthesis during the approach; audio starts only after visual readiness.
 - Typed test questions also wait for visual readiness.
@@ -38,9 +40,9 @@ For scene preview without camera, microphone, models, or speech:
 python tools/preview_scenes.py --cycle
 ```
 
-Preview keys: 1 page turn, 2 box study, 3 retrieve book, 4 retrieve box, 5 look up, 6 return to book, 7 put away book, 8 put away box. I toggles diagnostics; Esc exits. A selected action follows a compatible entry route first. It does not force-cut an active action.
+Preview and live hotkeys: 1 page turn, 2 box study, 3 retrieve book, 4 retrieve box, 5 look up from book, 6 return to book, 7 put away book, 8 put away box, 9 look up from box, 0 return to box. I toggles diagnostics; Esc exits. A selected action follows a compatible entry route first. It does not force-cut an active action.
 
-Preview mode admits the complete activity graph. Live mode keeps tinkering and the prop-changing routes disabled until their boundaries and engagement footage are ready. A missing engagement route never causes a detour through retrieving a book just to reuse the greeting.
+Both reading and tinkering activities are enabled in visitor operation. Wilhelm acknowledges visitors from either activity using its respective look-up clip, holds the corresponding visitor-facing endpoint during conversation, and returns to that activity upon cooldown.
 
 On Windows, replace `python` with `.\.venv\Scripts\python.exe`.
 
@@ -106,7 +108,7 @@ Run the benchmark without `--headless` on the Pi's actual display. Output includ
 
 Desktop validation on November 3, 2026:
 
-- All eight original clips decoded successfully.
+- All ten original clips decoded successfully.
 - Native application smoke test: greeting audio began at approximately 10.09 seconds in the settled `engaged_book` scene; listening followed audio completion; the return reached `reading` before IDLE.
 - The six-action activity preview completed all 240 frames per action, with presentation durations of approximately 10.00-10.03 seconds and no playback underflows.
 - Preview-cycle median display interval was approximately 33.34 ms, p95 34.12 ms; median render work was approximately 7.36 ms at 1024 x 768 with 960-pixel-wide decode.
@@ -116,7 +118,7 @@ These are Windows headless measurements, not Pi performance guarantees. The appl
 ## Remaining asset and installation work
 
 - Generate approved quiet reading/tinkering/resting footage.
-- Supply tinkering/neutral engagement and return bridges before enabling those live activities.
+- Supply additional subtle resting/thinking loops and conversation variations for reading and tinkering.
 - Prototype the speaking method before generating many speaking assets. Generic talking video does not synchronize to arbitrary speech, and fixed mouth overlays cannot track a moving head.
 - Add approved listening, thinking, and speech motion. The held video endpoint is a temporary conversation fallback.
 - Visually approve source boundaries and any crossfade duration on the intended display. Current core entry dissolves are 160 ms; preview prop-changing edges default to direct joins.

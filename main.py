@@ -450,7 +450,7 @@ class TalkingPortraitApp:
     def run(self):
         last_vision_poll = 0.0
         interval = max(0.02, float(self.config["vision"].get("poll_interval_seconds", 0.1)))
-        print("[App] SPACE: wake | T: test question | 1-6: play anim | I: anim debug HUD | C: camera | H: diagnostics | ESC/Q: quit")
+        print("[App] SPACE: wake | T: test question | 1-0: play anim | I: anim debug HUD | C: camera | H: diagnostics | ESC/Q: quit")
         try:
             self.vision.start()
             if hasattr(self.tts, "warmup") and self.config["tts"].get("warmup_enabled", True):
@@ -493,6 +493,14 @@ class TalkingPortraitApp:
                             self.renderer.trigger_animation("look_up")
                         elif event.key == pygame.K_6:
                             self.renderer.trigger_animation("return_to_book")
+                        elif event.key == pygame.K_7:
+                            self.renderer.trigger_animation("put_away_book")
+                        elif event.key == pygame.K_8:
+                            self.renderer.trigger_animation("put_away_tinker")
+                        elif event.key == pygame.K_9:
+                            self.renderer.trigger_animation("look_up_from_tinker_box")
+                        elif event.key == pygame.K_0:
+                            self.renderer.trigger_animation("return_to_tinker")
                 if not self.running:
                     break
                 self._drain_events()

@@ -59,7 +59,7 @@ The review used source inspection, media metadata, stills, extracted frames, and
 
 ### Videos
 
-All eight originals are approximately ten seconds long, 1280 x 720, and 24 FPS. Windows media metadata reports stereo audio at 48 kHz. Audible content has not been approved; do not automatically enable those tracks.
+All ten originals are approximately ten seconds long, 1280 x 720, and 24 FPS. Windows media metadata reports stereo audio at 48 kHz. Audible content has not been approved; do not automatically enable those tracks.
 
 | File | Intended scene change | Implementation notes |
 | --- | --- | --- |
@@ -71,6 +71,8 @@ All eight originals are approximately ten seconds long, 1280 x 720, and 24 FPS. 
 | `put_away_tinker.mp4` | Tinkering -> neutral desk | Closes/removes the box and settles. Not currently included in the manifest. |
 | `look_up_from_book.mp4` | Reading -> engaged with book | Book remains present. Current crop ends before the full visitor-facing action settles. |
 | `return_to_book.mp4` | Engaged with book -> reading | Current crop ends while he is still facing the visitor. |
+| `look_up_from_tinker_box.mp4` | Tinkering -> engaged with box | Box remains present. Full visitor-facing transition. |
+| `return_to_tinker.mp4` | Engaged with box -> tinkering | Box remains present. Return to studying tinker box. |
 
 These roles do not certify that every proposed boundary matches. Scene connections become available only after visual approval.
 
@@ -82,6 +84,7 @@ These roles do not certify that every proposed boundary matches. Scene connectio
 | `end_conversation.png` | 947 x 534 | Visitor-facing reference with an open book. |
 | `natural_state.jpeg` | 1376 x 768 | Neutral desk reference without the activity props; omitted from the current manifest. |
 | `tinker_box.jpeg` | 1376 x 768 | Tinkering reference. |
+| `attention_tinker_box.png` | 1280 x 720 | Visitor-facing reference with tinker box present; resting conversation fallback. |
 | `Break_reference.png` | 956 x 535 | Additional reading reference; not an automatic playback target. |
 | `wilhelm_master_front.png` | 2752 x 1536 | Separate close-up composition requiring a deliberate connection. |
 | `workshop_master_empty.png` | 2752 x 1536 | Separate empty-room composition requiring a deliberate connection. |
@@ -144,6 +147,8 @@ flowchart LR
     T -->|Put away tinker box| N
     R -->|Look up| E[Engaged with book]
     E -->|Return to book| R
+    T -->|Look up from tinker box| ET[Engaged with box]
+    ET -->|Return to tinker| T
 ```
 
 Do not enable an edge until the source endpoint, transition, and destination endpoint have been approved together.
@@ -345,6 +350,8 @@ Acceptance: reading -> acknowledgment -> greeting -> conversation fallback -> re
 
 ### Milestone 2: Complete the autonomous activity cycle
 
+Status: Completed. Reading, neutral desk, and tinkering activities are fully enabled with validated put-away, retrieval, engagement, and return footage.
+
 Work:
 
 1. Catalog/process both put-away clips and the neutral reference.
@@ -353,7 +360,7 @@ Work:
 4. Commit activity and prop changes on completion.
 5. Add repetition limits and activity memory.
 
-Acceptance: reading -> put away book -> neutral -> retrieve box -> tinker -> put away box -> neutral -> retrieve book works without prop popping. Activities lacking an approved engagement route remain preview-only during visitor operation.
+Acceptance: reading -> put away book -> neutral -> retrieve box -> tinker -> put away box -> neutral -> retrieve book works without prop popping. Approaching visitors are acknowledged from either reading or tinkering states.
 
 ### Milestone 3: Support arrivals throughout the enabled scene graph
 

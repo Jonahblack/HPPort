@@ -53,7 +53,7 @@ Token quotas in `gemini_live` are best-effort application limits, **not a hard s
 
 ## Responsiveness and graphics
 
-Wilhelm's native video playback now uses a scene director and bounded background decoding. Full source actions run at 24 FPS; greeting speech waits for the visitor-facing pose, and the final video frame remains displayed through conversation. Reading/page turns are enabled; the complete prop-changing activity cycle is available in a separate preview while engagement footage is missing. See [playback and asset review](docs/wilhelm_playback.md) for controls, configuration, validation, and remaining assets.
+Wilhelm's native video playback now uses a scene director and bounded background decoding. Full source actions run at 24 FPS; greeting speech waits for the visitor-facing pose, and the final video frame remains displayed through conversation. Both reading and tinkering activities are enabled with complete engagement and return routes, allowing Wilhelm to transition between books and tinker projects and converse with visitors from either state. See [playback and asset review](docs/wilhelm_playback.md) for controls, configuration, validation, and remaining assets.
 
 - Generation, synthesis, and playback run as separate stages with bounded queues. Later phrases can be generated and synthesized while the current phrase plays.
 - Whisper defaults to `tiny.en`, int8, and two CPU threads. Silence after speech ends a phrase after approximately 0.5 seconds; the initial listening window is four seconds.
@@ -63,7 +63,7 @@ Wilhelm's native video playback now uses a scene director and bounded background
 
 The camera driver detects **motion on the CPU**. It can inspect Hailo SDK availability, but this repository does not currently run Hailo person inference. An AI HAT is optional; do not interpret motion triggers as reliable person recognition.
 
-Controls: **Space** wake, **T** test question, **C** camera preview, **H** diagnostics, **Esc/Q** quit. `--fullscreen` applies to both normal and demo runs.
+Controls: **Space** wake, **T** test question, **1–0** trigger animations, **I** anim HUD, **C** camera preview, **H** diagnostics, **Esc/Q** quit. `--fullscreen` applies to both normal and demo runs.
 
 ## Browser application
 
