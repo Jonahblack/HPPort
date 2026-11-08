@@ -15,7 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=str(Path(__file__).resolve().parents[1] / "portrait_config.json"))
     parser.add_argument("--fullscreen", action="store_true")
-    parser.add_argument("--cycle", action="store_true", help="Preview the complete reading/tinkering cycle")
+    parser.add_argument("--cycle", action="store_true", help="Preview the complete reading/tinkering/away cycle")
     args = parser.parse_args()
     config = load_config(args.config, demo_mode=True)
     config["renderer"].setdefault("scene_director", {})["enabled"] = True
@@ -24,14 +24,14 @@ def main():
     renderer = PortraitRenderer(config)
     ids = ("page_flip", "tinker_box_study", "get_out_book", "get_out_tinker_box",
            "look_up", "return_to_book", "put_away_book", "put_away_tinker",
-           "look_up_from_tinker_box", "return_to_tinker")
+           "look_up_from_tinker_box", "return_to_tinker", "walk_away", "walk_in")
     cycle = iter(("page_flip", "put_away_book", "get_out_tinker_box", "tinker_box_study",
                   "look_up_from_tinker_box", "return_to_tinker",
-                  "put_away_tinker", "get_out_book")) if args.cycle else iter(())
+                  "put_away_tinker", "walk_away", "walk_in", "get_out_book")) if args.cycle else iter(())
     pending = next(cycle, None)
     running = True
     try:
-        print("1-0 select actions; compatible entry routes play first. I: diagnostics, Esc: quit.")
+        print("1-0, -, = select actions; compatible entry routes play first. I: diagnostics, Esc: quit.")
         while running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q)):
@@ -42,6 +42,12 @@ def main():
                         idx = 9 if event.key == pygame.K_0 else (event.key - pygame.K_1)
                         if idx < len(ids):
                             renderer.trigger_animation(ids[idx])
+                    elif event.key == pygame.K_MINUS:
+                        pending = None
+                        renderer.trigger_animation("walk_away")
+                    elif event.key == pygame.K_EQUALS:
+                        pending = None
+                        renderer.trigger_animation("walk_in")
                     elif event.key == pygame.K_i:
                         renderer.toggle_anim_debug_hud()
             if not running:

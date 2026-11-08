@@ -162,6 +162,7 @@ class PortraitRenderer:
                 "wilhelm_tinker": ["wilhelm_tinker.jpeg", "tinker_box.jpeg"],
                 "wilhelm_engaged_tinker": ["wilhelm_engaged_tinker.png", "attention_tinker_box.png"],
                 "wilhelm_neutral": ["wilhelm_neutral.jpeg", "natural_state.jpeg"],
+                "empty_room": ["empty_room.png", "workshop_master_empty.png"],
                 "eyes_half": ["wilhelm_desk_eyes_half.png", "forest_warrior_blink_half.png", "eyes_half.png"],
                 "eyes_closed": ["wilhelm_desk_eyes_closed.png", "forest_warrior_blink.png", "eyes_closed.png"],
                 "mouth_1": ["wilhelm_desk_mouth_1.png", "wilhelm_desk_speaking_neutral.png", "mouth_1.png"],
@@ -488,7 +489,7 @@ class PortraitRenderer:
             or self.sprites.get("base")
         )
 
-        incoming = active_idle if anim_id in ("return_to_book", "page_flip", "tinker_box_study", "get_out_book", "get_out_tinker_box", "put_away_book", "put_away_tinker", "return_to_tinker", "return_to_tinker_box") else speaking_base
+        incoming = self.sprites.get("empty_room") if anim_id == "walk_away" else (active_idle if anim_id in ("return_to_book", "page_flip", "tinker_box_study", "get_out_book", "get_out_tinker_box", "put_away_book", "put_away_tinker", "return_to_tinker", "return_to_tinker_box", "walk_in") else speaking_base)
         outgoing = active_idle if anim_id not in ("return_to_book", "return_to_tinker", "return_to_tinker_box") else speaking_base
 
         if force and self.transition_player.is_locked:
@@ -963,7 +964,7 @@ class PortraitRenderer:
         # 6.5. Idle Animation Debug Controls HUD (Hotkey [I] to toggle)
         if getattr(self, "show_anim_debug_hud", False):
             anim_hud_w = 420
-            anim_hud_h = 336
+            anim_hud_h = 370
             anim_hud_x = frame_margin_x + 24
             anim_hud_y = frame_margin_y + 24 + (188 if self.show_debug_hud else 0)
 
@@ -995,6 +996,8 @@ class PortraitRenderer:
                 ("  [8] put_away_tinker    (240f - Tinker -> Neutral)", (200, 220, 240)),
                 ("  [9] look_up_tinker     (240f - Tinker -> Engaged)", (200, 220, 240)),
                 ("  [0] return_to_tinker   (240f - Engaged -> Tinker)", (200, 220, 240)),
+                ("  [-] walk_away          (240f - Neutral -> Away)", (200, 220, 240)),
+                ("  [=] walk_in            (240f - Away -> Neutral)", (200, 220, 240)),
                 ("  [I] Toggle this HUD", (150, 160, 170)),
             ]
 

@@ -4,7 +4,7 @@
   "target_assets_dir": "assets",
   "initial_scene": "reading",
   "canvas_size": [1280, 720],
-  "review_note": "Core reading and tinkering clips are implementation candidates. Final visual approval and Pi measurements remain required.",
+  "review_note": "Core reading, tinkering, and away/return clips are implementation candidates. Final visual approval and Pi measurements remain required.",
   "scenes": {
     "reading": {
       "activity": "reading",
@@ -30,7 +30,7 @@
       "book": "absent",
       "box": "absent",
       "pose": "neutral_desk",
-      "engagement_scene": "engaged_book"
+      "engagement_scene": "neutral"
     },
     "tinkering": {
       "activity": "tinkering",
@@ -55,6 +55,15 @@
       "box": "present",
       "pose": "visitor_facing",
       "engagement_scene": "engaged_tinker"
+    },
+    "away": {
+      "activity": "away",
+      "return_scene": "away",
+      "sprite": "empty_room",
+      "book": "absent",
+      "box": "absent",
+      "pose": "empty_room",
+      "engagement_scene": "neutral"
     }
   },
   "clips": [
@@ -257,6 +266,46 @@
         "source_end"
       ],
       "description": "Return from visitor-facing posture to studying tinker box."
+    },
+    {
+      "id": "walk_away",
+      "source_file": "walk_away.mp4",
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "neutral",
+      "exit_scene": "away",
+      "category": "transition",
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Wilhelm stands up from the desk and leaves the room empty."
+    },
+    {
+      "id": "walk_in",
+      "source_file": "walk_in.mp4",
+      "source_fps": 24,
+      "start_frame": 0,
+      "end_frame": null,
+      "entry_scene": "away",
+      "exit_scene": "neutral",
+      "category": "transition",
+      "runtime_enabled": true,
+      "review_status": "candidate",
+      "crossfade_ms": 160,
+      "audio": "muted",
+      "face_motion": "baked_in",
+      "loop": false,
+      "checkpoints": [
+        "source_end"
+      ],
+      "description": "Wilhelm enters the empty room, approaches the desk, and sits down."
     }
   ],
   "stills": [
@@ -280,6 +329,10 @@
     {
       "source_file": "attention_tinker_box.png",
       "target_file": "wilhelm_engaged_tinker.png"
+    },
+    {
+      "source_file": "empty_room.png",
+      "target_file": "empty_room.png"
     },
     {
       "source_file": "wilhelm_master_front.png",

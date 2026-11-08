@@ -59,7 +59,7 @@ The review used source inspection, media metadata, stills, extracted frames, and
 
 ### Videos
 
-All ten originals are approximately ten seconds long, 1280 x 720, and 24 FPS. Windows media metadata reports stereo audio at 48 kHz. Audible content has not been approved; do not automatically enable those tracks.
+All twelve originals are approximately ten seconds long, 1280 x 720, and 24 FPS. Windows media metadata reports stereo audio at 48 kHz. Audible content has not been approved; do not automatically enable those tracks.
 
 | File | Intended scene change | Implementation notes |
 | --- | --- | --- |
@@ -73,6 +73,8 @@ All ten originals are approximately ten seconds long, 1280 x 720, and 24 FPS. Wi
 | `return_to_book.mp4` | Engaged with book -> reading | Current crop ends while he is still facing the visitor. |
 | `look_up_from_tinker_box.mp4` | Tinkering -> engaged with box | Box remains present. Full visitor-facing transition. |
 | `return_to_tinker.mp4` | Engaged with box -> tinkering | Box remains present. Return to studying tinker box. |
+| `walk_away.mp4` | Neutral desk -> away (empty room) | Wilhelm stands up and leaves the room. |
+| `walk_in.mp4` | Away (empty room) -> neutral desk | Wilhelm enters the room, walks to the desk, and sits down. |
 
 These roles do not certify that every proposed boundary matches. Scene connections become available only after visual approval.
 
@@ -85,6 +87,7 @@ These roles do not certify that every proposed boundary matches. Scene connectio
 | `natural_state.jpeg` | 1376 x 768 | Neutral desk reference without the activity props; omitted from the current manifest. |
 | `tinker_box.jpeg` | 1376 x 768 | Tinkering reference. |
 | `attention_tinker_box.png` | 1280 x 720 | Visitor-facing reference with tinker box present; resting conversation fallback. |
+| `empty_room.png` | 1280 x 720 | Empty room reference; held visual while Wilhelm is away. |
 | `Break_reference.png` | 956 x 535 | Additional reading reference; not an automatic playback target. |
 | `wilhelm_master_front.png` | 2752 x 1536 | Separate close-up composition requiring a deliberate connection. |
 | `workshop_master_empty.png` | 2752 x 1536 | Separate empty-room composition requiring a deliberate connection. |
@@ -149,6 +152,8 @@ flowchart LR
     E -->|Return to book| R
     T -->|Look up from tinker box| ET[Engaged with box]
     ET -->|Return to tinker| T
+    N -->|Walk away| A[Away: empty room]
+    A -->|Walk in| N
 ```
 
 Do not enable an edge until the source endpoint, transition, and destination endpoint have been approved together.

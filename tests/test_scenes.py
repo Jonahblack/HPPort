@@ -142,6 +142,38 @@ class TestSceneDirector(unittest.TestCase):
         self.assertEqual(d.scene, "tinkering")
         self.assertFalse(d.ready_for_speech)
 
+    def test_away_and_return_cycle_with_engagement_while_away(self):
+        d = self.director
+        # From reading, request walk_away -> puts away book, then walks away
+        self.assertTrue(d.request_action("walk_away"))
+        d.update()
+        self.assertEqual(d.player.played, ["put_away_book"])
+        d.player.finish()
+        d.update()
+        self.assertEqual(d.player.played, ["put_away_book", "walk_away"])
+        d.player.finish()
+        d.update()
+        self.assertEqual(d.scene, "away")
+        self.assertFalse(d.ready_for_speech)
+
+        # Visitor asks for Wilhelm while away -> walks in to neutral desk
+        d.request_engagement()
+        d.update()
+        self.assertEqual(d.player.played[-1], "walk_in")
+        d.player.finish()
+        d.update()
+        self.assertEqual(d.scene, "neutral")
+        self.assertTrue(d.ready_for_speech)
+
+        # End of conversation -> return to away
+        d.request_return()
+        d.update()
+        self.assertEqual(d.player.played[-1], "walk_away")
+        d.player.finish()
+        d.update()
+        self.assertEqual(d.scene, "away")
+        self.assertFalse(d.ready_for_speech)
+
     def test_decode_failure_cannot_commit_an_unseen_prop_change(self):
         d = self.director
         d.request_engagement()
