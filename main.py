@@ -26,6 +26,10 @@ from renderer.renderer import PortraitRenderer
 from live.safeguard import TokenSafeguard
 from live.gemini_live import GeminiLiveClient
 from speech_pipeline import SpeechPipelineError, run_speech_pipeline
+try:
+    from tts.filler import FillerManager
+except ImportError:
+    FillerManager = None
 
 
 class TalkingPortraitApp:
@@ -60,6 +64,12 @@ class TalkingPortraitApp:
         self.renderer = PortraitRenderer(self.config)
         self.safeguard = TokenSafeguard(self.config)
         self.live_client = GeminiLiveClient(self.config, safeguard=self.safeguard)
+        self.filler_mgr = None
+        if FillerManager is not None:
+            try:
+                self.filler_mgr = FillerManager(self.config, self.tts, lipsync_engine=self.renderer.lipsync_engine)
+            except Exception as exc:
+                print(f"[App] FillerManager init notice: {exc}")
         state_config = self.config["state_machine"]
         self.listen_timeout_seconds = float(state_config.get("silence_timeout_seconds", 4.0))
         self.max_listen_duration_seconds = float(state_config.get("max_listen_duration_seconds", 10.0))
@@ -93,6 +103,8 @@ class TalkingPortraitApp:
         elif new_state == PortraitState.LISTENING:
             self.renderer.set_subtitle("I'm listening...")
             self._ensure_listener()
+        elif new_state == PortraitState.THINKING:
+            self.renderer.set_subtitle("Hmm, let me consider...")
         elif new_state in (PortraitState.IDLE, PortraitState.COOLDOWN):
             self._turn_id += 1
             prepared = getattr(self, "_pending_greeting", None)
@@ -100,7 +112,15 @@ class TalkingPortraitApp:
             if prepared:
                 self._discard_prepared(prepared)
             self.conversation_history.clear()
-            self.renderer.set_subtitle("" if new_state == PortraitState.IDLE else "Until our next adventure...")
+            if new_state == PortraitState.IDLE:
+                self.renderer.set_subtitle("")
+            else:
+                farewell = (
+                    self.config.get("state_machine", {}).get("presence_loss_farewell", "Farewell, wanderer...")
+                    if getattr(self.fsm, "_presence_lost", False)
+                    else "Until our next adventure..."
+                )
+                self.renderer.set_subtitle(farewell)
             self.renderer.set_viseme("X", amplitude=0.0)
             self.safeguard.reset_session()
             self._update_safeguard_hud()
@@ -278,8 +298,24 @@ class TalkingPortraitApp:
             self._play_prepared(prepared, turn_start if first_audio else None)
             first_audio = False
 
-        spoken = run_speech_pipeline(clauses(), self._prepare_phrase, play,
-                                     self._discard_prepared, self._stop)
+        filler = None
+        if getattr(self, "filler_mgr", None) is not None and not getattr(self, "demo_mode", False):
+            try:
+                filler = self.filler_mgr.get_filler()
+                if filler:
+                    filler.setdefault("latency", 0.0)
+            except Exception as exc:
+                print(f"[App] Filler acquisition notice: {exc}")
+
+        spoken = run_speech_pipeline(
+            clauses(),
+            self._prepare_phrase,
+            play,
+            self._discard_prepared,
+            self._stop,
+            filler=filler,
+            play_filler=lambda f: self._play_prepared(f),
+        )
         if not spoken and not self._stop.is_set():
             raise RuntimeError("The model returned no spoken response")
         return " ".join(spoken)
@@ -453,12 +489,18 @@ class TalkingPortraitApp:
         print("[App] SPACE: wake | T: test question | 1-0/-=: play anim | I: anim debug HUD | C: camera | H: diagnostics | ESC/Q: quit")
         try:
             self.vision.start()
-            if hasattr(self.tts, "warmup") and self.config["tts"].get("warmup_enabled", True):
+            if (hasattr(self.tts, "warmup") and self.config["tts"].get("warmup_enabled", True)) or self.filler_mgr is not None:
                 def warmup():
-                    try:
-                        self.tts.warmup(self.config["llm"]["greeting_prompt"])
-                    except Exception as exc:
-                        print(f"[TTS] Warmup notice: {exc}")
+                    if hasattr(self.tts, "warmup") and self.config["tts"].get("warmup_enabled", True):
+                        try:
+                            self.tts.warmup(self.config["llm"]["greeting_prompt"])
+                        except Exception as exc:
+                            print(f"[TTS] Warmup notice: {exc}")
+                    if self.filler_mgr is not None:
+                        try:
+                            self.filler_mgr.warmup()
+                        except Exception as exc:
+                            print(f"[Filler] Warmup notice: {exc}")
                 self._warmup_thread = threading.Thread(target=warmup, daemon=True, name="portrait-warmup")
                 self._warmup_thread.start()
             while self.running:

@@ -104,6 +104,72 @@ class TestPortraitStateMachine(unittest.TestCase):
         self.fsm.update(visual_ready=True)
         self.assertEqual(self.fsm.state, PortraitState.IDLE)
 
+    def test_presence_loss_during_listening_triggers_cooldown_early(self):
+        self.fsm.state = PortraitState.LISTENING
+        self.fsm.presence_loss_frames = 3
+
+        # 2 frames of absence -> still LISTENING
+        self.fsm.on_person_frame(False)
+        self.fsm.on_person_frame(False)
+        self.assertEqual(self.fsm.state, PortraitState.LISTENING)
+
+        # 3rd frame of absence -> triggers COOLDOWN early
+        self.fsm.on_person_frame(False)
+        self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
+        self.assertTrue(self.fsm._presence_lost)
+        # Latched presence should be False so a new visitor can wake immediately
+        self.assertFalse(self.fsm._cooldown_presence_latched)
+
+    def test_presence_loss_accelerates_cooldown_duration(self):
+        self.fsm.presence_loss_cooldown_duration = 0.2
+        self.fsm.cooldown_duration = 10.0
+        self.fsm.start_cooldown(presence_lost=True)
+        self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
+        self.assertTrue(self.fsm._presence_lost)
+
+        # Before accelerated duration expires
+        self.fsm.update(visual_ready=True)
+        self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
+
+        # After accelerated duration (0.2s)
+        time.sleep(0.25)
+        self.fsm.update(visual_ready=True)
+        self.assertEqual(self.fsm.state, PortraitState.IDLE)
+        self.assertFalse(self.fsm._presence_lost)
+
+    def test_fast_wake_during_cooldown_for_new_visitor(self):
+        self.fsm.wake_confirm_frames = 2
+        # Visitor walked away, cooldown started with presence lost
+        self.fsm.start_cooldown(presence_lost=True)
+        self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
+        self.assertFalse(self.fsm._cooldown_presence_latched)
+
+        # New visitor approaches during cooldown
+        self.fsm.on_person_frame(True)
+        self.assertEqual(self.fsm.state, PortraitState.COOLDOWN)
+
+        # Second confirmed frame -> fast interrupt to WAKE_PENDING!
+        self.fsm.on_person_frame(True)
+        self.assertEqual(self.fsm.state, PortraitState.WAKE_PENDING)
+
+    def test_presence_loss_during_cooldown_unlatches_and_accelerates(self):
+        self.fsm.presence_loss_frames = 3
+        self.fsm.presence_loss_cooldown_duration = 0.1
+        self.fsm.start_cooldown(presence_lost=False)
+        self.assertTrue(self.fsm._cooldown_presence_latched)
+
+        # Visitor departs during cooldown
+        self.fsm.on_person_frame(False)
+        self.assertFalse(self.fsm._cooldown_presence_latched)
+
+        self.fsm.on_person_frame(False)
+        self.fsm.on_person_frame(False)
+        self.assertTrue(self.fsm._presence_lost)
+
+        time.sleep(0.15)
+        self.fsm.update(visual_ready=True)
+        self.assertEqual(self.fsm.state, PortraitState.IDLE)
+
 
 if __name__ == "__main__":
     unittest.main()

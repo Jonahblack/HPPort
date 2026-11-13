@@ -16,11 +16,23 @@ class SpeechPipelineError(RuntimeError):
         self.__cause__ = cause
 
 
-def run_speech_pipeline(clauses, prepare, play, discard, cancelled, max_pending=2):
+def run_speech_pipeline(
+    clauses,
+    prepare,
+    play,
+    discard,
+    cancelled,
+    max_pending=2,
+    filler=None,
+    play_filler=None,
+    discard_filler=None,
+):
     """Play prepared clauses in order; discard every unplayed resource on exit.
 
 An exception carries the already-spoken clauses so a caller can avoid repeating
 an answer through a fallback model after a partially successful stream.
+If a pre-cached filler is provided, it is played immediately on the caller thread
+while generation and synthesis of upcoming clauses proceed concurrently.
 """
     pending = queue.Queue(maxsize=max(1, max_pending))
     ready = queue.Queue(maxsize=max(1, max_pending))
@@ -89,6 +101,19 @@ an answer through a fallback model after a partially successful stream.
     for worker in workers:
         worker.start()
     try:
+        # If an instant filler is supplied, play it immediately on the consumer
+        # thread while generation and synthesis prepare the first response clause.
+        if filler is not None and active():
+            play_fn = play_filler if play_filler is not None else play
+            try:
+                play_fn(filler)
+            except Exception as exc:
+                if discard_filler:
+                    discard_filler(filler)
+                raise SpeechPipelineError(exc, [], "playback") from exc
+            if discard_filler:
+                discard_filler(filler)
+
         while active():
             item = take(ready)
             if item is done:

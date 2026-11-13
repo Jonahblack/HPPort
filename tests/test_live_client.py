@@ -2,9 +2,24 @@
 
 import asyncio
 import json
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+if sys.platform == "win32":
+    try:
+        import asyncio.proactor_events as _pe
+        def _mock_self_pipe(self):
+            self._ssock = MagicMock()
+            self._csock = MagicMock()
+            self._ssock.fileno.return_value = -1
+            self._csock.fileno.return_value = -1
+            self._internal_fds += 1
+        _pe.BaseProactorEventLoop._make_self_pipe = _mock_self_pipe
+        _pe.BaseProactorEventLoop._loop_self_reading = lambda self, f=None: None
+    except Exception:
+        pass
 
 from live.gemini_live import GeminiLiveClient
 from live.safeguard import TokenSafeguard
@@ -173,7 +188,8 @@ class TestGeminiLiveClient(unittest.TestCase):
                 yield message
 
         session.receive.side_effect = receive
-        self.sdk.aio.live.connect.return_value.__aenter__.return_value = session
+        self.sdk.aio.live.connect.return_value.__aenter__ = AsyncMock(return_value=session)
+        self.sdk.aio.live.connect.return_value.__aexit__ = AsyncMock(return_value=None)
         return session
 
     def test_native_voice_and_history_are_sent_with_explicit_turn_boundary(self):

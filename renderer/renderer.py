@@ -8,7 +8,7 @@ from collections import OrderedDict
 import pygame
 from typing import Dict, Any, Optional, Tuple
 from state_machine import PortraitState
-from renderer.animation import BlinkController, LipSyncEngine, SaccadeController, TransitionSequencePlayer, IdleActivityController, VISEME_NAMES
+from renderer.animation import BlinkController, LipSyncEngine, SaccadeController, TransitionSequencePlayer, IdleActivityController, VISEME_NAMES, DeskFaceRig
 from renderer.asset_catalog import load_catalog
 from renderer.scene_director import SceneDirector
 from renderer.video import BufferedVideoPlayer
@@ -99,6 +99,19 @@ class PortraitRenderer:
         self.transition_player = TransitionSequencePlayer(fps=self.fps)
         self.idle_controller = IdleActivityController()
         self.scene_director = None
+
+        # Desk View face articulation settings
+        self.desk_view_config = self.config.get("desk_view", {})
+        self.desk_view_enabled = bool(self.desk_view_config.get("enabled", True))
+        self.face_rel_x = float(self.desk_view_config.get("face_rel_x", 0.5756))
+        self.face_rel_y = float(self.desk_view_config.get("face_rel_y", 0.3333))
+        ref_canvas = tuple(self.config.get("scene_director", {}).get("canvas_size", [1280, 720]))
+        self.desk_face_rig = DeskFaceRig(
+            face_rel_x=self.face_rel_x,
+            face_rel_y=self.face_rel_y,
+            reference_canvas_size=ref_canvas,
+        )
+
         self._load_sprites()
         self._load_transitions()
 
@@ -710,8 +723,6 @@ class PortraitRenderer:
             self.screen.blit(scaled_bg, (bg_dest_x, bg_dest_y))
 
         if self.scene_director:
-            # Always retain the real endpoint, including throughout speech and cooldown.
-            # No face layers are applied to video until an authored compatible set exists.
             scene = self.scene_director.catalog["scenes"].get(self.scene_director.scene, {})
             fallback = self.sprites.get(scene.get("sprite", "wilhelm_reading")) or base_sprite
             # One scene canvas prevents a small aspect-ratio change between masters and video.
@@ -721,6 +732,26 @@ class PortraitRenderer:
             target_size = (max(1, round(bw * scale)), max(1, round(bh * scale)))
             dest = (canvas_rect.centerx - target_size[0] // 2, canvas_rect.centery - target_size[1] // 2)
             self._last_frame_dest = dest
+
+            # Detect whether holding a visitor-facing scene during conversation
+            is_active_transition = bool(self.scene_director.active) or getattr(self.transition_player, "is_playing", False)
+            is_visitor_facing = (scene.get("pose") == "visitor_facing") or (self.scene_director.scene in ("engaged_book", "engaged_tinker", "engaged_neutral"))
+            is_conversing = self.current_state in (PortraitState.GREETING, PortraitState.LISTENING, PortraitState.THINKING, PortraitState.SPEAKING)
+            can_articulate = (not is_active_transition) and is_visitor_facing and is_conversing and self.desk_view_enabled
+            self._is_articulating = can_articulate
+
+            if can_articulate:
+                # Apply subtle sinusoidal chest breathing drift (2-3px vertical offset)
+                pad = 6
+                padded_size = (target_size[0] + pad, target_size[1] + pad)
+                dest_x = canvas_rect.centerx - padded_size[0] // 2
+                dest_y = canvas_rect.centery - padded_size[1] // 2 + int(breath_offset)
+                active_size = padded_size
+                active_dest = (dest_x, dest_y)
+            else:
+                active_size = target_size
+                active_dest = dest
+
             if self.transition_player.last_surface is None and fallback is not None:
                 crop = fallback.get_rect()
                 if crop.width / crop.height > bw / bh:
@@ -730,13 +761,36 @@ class PortraitRenderer:
                 crop.center = fallback.get_rect().center
                 fallback = fallback.subsurface(crop)
                 self.transition_player._outgoing = fallback
-            surface = self.transition_player.update(target_size)
+            surface = self.transition_player.update(active_size)
             if surface is not None:
-                if surface.get_size() != target_size:
-                    surface = pygame.transform.smoothscale(surface, target_size)
-                self.screen.blit(surface, dest)
+                if surface.get_size() != active_size:
+                    surface = pygame.transform.smoothscale(surface, active_size)
+                self.screen.blit(surface, active_dest)
             elif fallback is not None:
-                self.screen.blit(self._scaled_sprite(str(id(fallback)), fallback, target_size), dest)
+                self.screen.blit(self._scaled_sprite(str(id(fallback)), fallback, active_size), active_dest)
+
+            if can_articulate:
+                is_speaking = (self.current_state == PortraitState.SPEAKING or
+                               self.audio_amplitude > 0.05 or
+                               self.current_viseme not in ("X", "A") or
+                               self.current_mouth_index > 1)
+                self.desk_face_rig.render(
+                    surface=self.screen,
+                    target_size=active_size,
+                    dest=active_dest,
+                    blink_stage=blink_stage,
+                    closure_progress=closure_progress,
+                    viseme=self.current_viseme,
+                    mouth_index=self.current_mouth_index,
+                    pupil_x=self.eye_offset_x,
+                    pupil_y=self.eye_offset_y,
+                    is_speaking=is_speaking,
+                    breath_offset=0.0,
+                    head_yaw_x=head_yaw_x,
+                    head_pitch_y=head_pitch_y,
+                    sprites=self.sprites,
+                )
+
             self._draw_magic_motes(canvas_rect)
         elif self.transition_player.is_playing:
             bw, bh = self.transition_player.get_native_size() or (1024, 768)
@@ -952,7 +1006,8 @@ class PortraitRenderer:
                 f"Turnaround:     {self.latency_metrics.get('turnaround', '--')}",
                 f"Token Quota:    {self.latency_metrics.get('quota', '100% LOCAL')}",
                 f"Gaze Tracking:  ({self.current_gaze_x:+.2f}, {self.current_gaze_y:+.2f}) Dist: {self.current_distance:.1f}",
-                ("Face animation: held video endpoint" if self.scene_director else
+                ("Face animation: live desk articulation" if (self.scene_director and getattr(self, "_is_articulating", False)) else
+                 "Face animation: held video endpoint" if self.scene_director else
                  f"Viseme/Eyelids: Viseme_{self.current_viseme} | {self.blink_controller.get_stage().upper()}"),
                 f"Scene: {self.latency_metrics.get('scene', 'legacy image renderer')[:65]}",
             ]

@@ -627,3 +627,249 @@ class IdleActivityController:
             self._next_action_time = self._last_action_time + random.uniform(
                 self.action_interval_min, self.action_interval_max
             )
+
+
+class DeskFaceRig:
+    """Dynamic facial articulation rig for Wilhelm's desk view in Scene Director mode.
+
+    Articulates:
+    - Preston-Blair or amplitude-driven mouth visemes during speech.
+    - Biological eyelid blinks with natural easing (180ms ease-in/out every 2.5-5.5s).
+    - Visitor gaze tracking & micro-saccades (1-2px ocular tremor).
+    - Subtle chest breathing drift (2-3px sinusoidal vertical offset).
+    """
+
+    def __init__(
+        self,
+        face_rel_x: float = 0.5756,
+        face_rel_y: float = 0.3333,
+        reference_canvas_size: Tuple[int, int] = (1280, 720),
+    ):
+        self.face_rel_x = float(face_rel_x)
+        self.face_rel_y = float(face_rel_y)
+        self.reference_canvas_size = reference_canvas_size
+
+    def get_face_geometry(
+        self,
+        target_size: Tuple[int, int],
+        dest: Tuple[int, int],
+        head_yaw_x: float = 0.0,
+        head_pitch_y: float = 0.0,
+        breath_offset: float = 0.0,
+    ) -> Dict[str, Any]:
+        """Compute pixel positions and dimensions for face, eyes, and mouth."""
+        ref_w, ref_h = self.reference_canvas_size
+        scale_x = target_size[0] / float(ref_w)
+        scale_y = target_size[1] / float(ref_h)
+        face_scale = min(scale_x, scale_y)
+
+        face_cx = dest[0] + int(target_size[0] * self.face_rel_x) + int(head_yaw_x * scale_x)
+        face_cy = dest[1] + int(target_size[1] * self.face_rel_y) + int((breath_offset + head_pitch_y) * scale_y)
+
+        # Eye locations relative to face center
+        left_eye_cx = face_cx - int(20 * scale_x)
+        left_eye_cy = face_cy - int(14 * scale_y)
+        right_eye_cx = face_cx + int(26 * scale_x)
+        right_eye_cy = face_cy - int(14 * scale_y)
+
+        eye_w = max(6, int(18 * scale_x))
+        eye_h = max(4, int(11 * scale_y))
+        iris_r = max(2, int(4.5 * face_scale))
+        pupil_r = max(1, int(2.5 * face_scale))
+
+        # Mouth location relative to face center
+        mouth_cx = face_cx + int(2 * scale_x)
+        mouth_cy = face_cy + int(32 * scale_y)
+
+        return {
+            "face_center": (face_cx, face_cy),
+            "face_scale": face_scale,
+            "scale_x": scale_x,
+            "scale_y": scale_y,
+            "left_eye": (left_eye_cx, left_eye_cy),
+            "right_eye": (right_eye_cx, right_eye_cy),
+            "eye_size": (eye_w, eye_h),
+            "iris_radius": iris_r,
+            "pupil_radius": pupil_r,
+            "mouth_center": (mouth_cx, mouth_cy),
+        }
+
+    def render_eyes(
+        self,
+        surface: Any,
+        geometry: Dict[str, Any],
+        blink_stage: str,
+        closure_progress: float,
+        pupil_x: float,
+        pupil_y: float,
+        sprites: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Render biological eased blinks, irises, pupils, and micro-saccades onto the surface."""
+        import pygame
+
+        face_scale = geometry["face_scale"]
+        scale_x = geometry["scale_x"]
+        scale_y = geometry["scale_y"]
+        eye_w, eye_h = geometry["eye_size"]
+        iris_r = geometry["iris_radius"]
+        pupil_r = geometry["pupil_radius"]
+
+        # Pupil offset clamped within eye boundaries
+        max_px = max(1, int(4 * scale_x))
+        max_py = max(1, int(2.5 * scale_y))
+        px = max(-max_px, min(max_px, int(pupil_x * scale_x)))
+        py = max(-max_py, min(max_py, int(pupil_y * scale_y)))
+
+        for eye_cx, eye_cy in (geometry["left_eye"], geometry["right_eye"]):
+            if blink_stage == "closed":
+                # Eased fully closed eyelid
+                arc_rect = pygame.Rect(eye_cx - eye_w // 2, eye_cy - eye_h // 4, eye_w, max(2, eye_h // 2 + 2))
+                pygame.draw.arc(surface, (55, 38, 25), arc_rect, 3.14, 6.28, max(1, int(2 * face_scale)))
+            else:
+                # White Sclera
+                sclera_rect = pygame.Rect(eye_cx - eye_w // 2, eye_cy - eye_h // 2, eye_w, eye_h)
+                pygame.draw.ellipse(surface, (242, 240, 235), sclera_rect)
+
+                # Blue-Grey Iris
+                pygame.draw.circle(surface, (70, 110, 160), (eye_cx + px, eye_cy + py), iris_r)
+                # Charcoal Pupil
+                pygame.draw.circle(surface, (15, 20, 30), (eye_cx + px, eye_cy + py), pupil_r)
+                # Specular Catchlight
+                catch_r = max(1, int(1.0 * face_scale))
+                pygame.draw.circle(surface, (255, 255, 255), (eye_cx + px - 1, eye_cy + py - 1), catch_r)
+                # Upper lash / eyelid fold contour
+                pygame.draw.arc(surface, (70, 50, 35), sclera_rect, 0.0, 3.14, max(1, int(1.5 * face_scale)))
+
+                # Eased Half-Closed Eyelid Overlay
+                if blink_stage == "half":
+                    drop_h = max(2, int(eye_h * max(0.2, min(0.9, closure_progress))))
+                    lid_rect = pygame.Rect(eye_cx - eye_w // 2, eye_cy - eye_h // 2, eye_w, drop_h)
+                    pygame.draw.rect(surface, (215, 175, 145), lid_rect)
+                    crease_rect = pygame.Rect(eye_cx - eye_w // 2, eye_cy - eye_h // 2 + drop_h - 2, eye_w, max(2, int(4 * face_scale)))
+                    pygame.draw.arc(surface, (75, 45, 30), crease_rect, 3.14, 6.28, max(1, int(2 * face_scale)))
+
+    def render_mouth(
+        self,
+        surface: Any,
+        geometry: Dict[str, Any],
+        viseme: str,
+        mouth_index: int,
+        is_speaking: bool = True,
+        crossfade_alpha: float = 1.0,
+        sprites: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Render Preston-Blair viseme lip-sync or legacy shapes during speech."""
+        import pygame
+
+        v = str(viseme).strip().upper()
+        if v not in VISEME_NAMES:
+            v = "X"
+
+        if not is_speaking and v in ("X", "A"):
+            return  # Retain natural resting mouth of the held video frame
+
+        mouth_cx, mouth_cy = geometry["mouth_center"]
+        scale_x = geometry["scale_x"]
+        scale_y = geometry["scale_y"]
+        face_scale = geometry["face_scale"]
+
+        # Check for authored cropped transparent mouth sprite
+        if sprites:
+            sprite = sprites.get(f"viseme_{v}") or sprites.get(f"mouth_{mouth_index}")
+            if sprite is not None:
+                max_overlay_w = int(geometry["scale_x"] * self.reference_canvas_size[0] * 0.4)
+                if (sprite.get_flags() & pygame.SRCALPHA) and sprite.get_width() < max_overlay_w:
+                    scaled_w = max(4, int(sprite.get_width() * face_scale))
+                    scaled_h = max(4, int(sprite.get_height() * face_scale))
+                    scaled_sprite = pygame.transform.smoothscale(sprite, (scaled_w, scaled_h))
+                    surface.blit(scaled_sprite, (mouth_cx - scaled_w // 2, mouth_cy - scaled_h // 2))
+                    return
+
+        # Preston-Blair Viseme Mouth Rendering (matching oil-painting style)
+        if v in ("A", "X"):
+            # Closed mouth / rest
+            pygame.draw.ellipse(surface, (90, 35, 30), (mouth_cx - int(15 * scale_x), mouth_cy, max(4, int(30 * scale_x)), max(2, int(4 * scale_y))))
+        elif v == "B":
+            # Slightly parted consonants (K, S, T, D, N, Z)
+            pygame.draw.ellipse(surface, (65, 18, 18), (mouth_cx - int(14 * scale_x), mouth_cy - int(2 * scale_y), max(4, int(28 * scale_x)), max(3, int(8 * scale_y))))
+            pygame.draw.rect(surface, (240, 240, 240), (mouth_cx - int(9 * scale_x), mouth_cy - int(2 * scale_y), max(2, int(18 * scale_x)), max(1, int(3 * scale_y))))
+        elif v == "C":
+            # Open vowels (EH, AE)
+            pygame.draw.ellipse(surface, (60, 15, 15), (mouth_cx - int(17 * scale_x), mouth_cy - int(4 * scale_y), max(4, int(34 * scale_x)), max(4, int(13 * scale_y))))
+            pygame.draw.rect(surface, (245, 245, 245), (mouth_cx - int(10 * scale_x), mouth_cy - int(4 * scale_y), max(2, int(20 * scale_x)), max(1, int(4 * scale_y))))
+            pygame.draw.ellipse(surface, (175, 55, 65), (mouth_cx - int(7 * scale_x), mouth_cy + int(3 * scale_y), max(2, int(14 * scale_x)), max(1, int(6 * scale_y))))
+        elif v == "D":
+            # Wide open vowels (AA, AO)
+            pygame.draw.ellipse(surface, (45, 10, 10), (mouth_cx - int(19 * scale_x), mouth_cy - int(6 * scale_y), max(4, int(38 * scale_x)), max(5, int(18 * scale_y))))
+            pygame.draw.rect(surface, (250, 250, 250), (mouth_cx - int(12 * scale_x), mouth_cy - int(6 * scale_y), max(2, int(24 * scale_x)), max(1, int(5 * scale_y))))
+            pygame.draw.ellipse(surface, (185, 65, 75), (mouth_cx - int(9 * scale_x), mouth_cy + int(4 * scale_y), max(2, int(18 * scale_x)), max(2, int(7 * scale_y))))
+        elif v == "E":
+            # Rounded vowels (O, OW, ER)
+            pygame.draw.ellipse(surface, (50, 12, 12), (mouth_cx - int(11 * scale_x), mouth_cy - int(5 * scale_y), max(4, int(22 * scale_x)), max(3, int(13 * scale_y))))
+            pygame.draw.rect(surface, (240, 240, 240), (mouth_cx - int(6 * scale_x), mouth_cy - int(5 * scale_y), max(2, int(12 * scale_x)), max(1, int(3 * scale_y))))
+        elif v == "F":
+            # Puckered lips (UW, W, OO)
+            pygame.draw.circle(surface, (55, 14, 14), (mouth_cx, mouth_cy + int(2 * scale_y)), max(2, int(7 * face_scale)))
+            pygame.draw.circle(surface, (230, 230, 230), (mouth_cx, mouth_cy + int(1 * scale_y)), max(1, int(3 * face_scale)))
+        elif v == "G":
+            # Labiodental (upper teeth on lower lip: F, V)
+            pygame.draw.ellipse(surface, (70, 20, 20), (mouth_cx - int(13 * scale_x), mouth_cy - int(2 * scale_y), max(4, int(26 * scale_x)), max(2, int(8 * scale_y))))
+            pygame.draw.rect(surface, (248, 248, 248), (mouth_cx - int(9 * scale_x), mouth_cy - int(2 * scale_y), max(2, int(18 * scale_x)), max(1, int(4 * scale_y))))
+        elif v == "H":
+            # Tongue against teeth (L, TH)
+            pygame.draw.ellipse(surface, (55, 15, 15), (mouth_cx - int(15 * scale_x), mouth_cy - int(4 * scale_y), max(4, int(30 * scale_x)), max(3, int(13 * scale_y))))
+            pygame.draw.rect(surface, (240, 240, 240), (mouth_cx - int(9 * scale_x), mouth_cy - int(4 * scale_y), max(2, int(18 * scale_x)), max(1, int(3 * scale_y))))
+            pygame.draw.ellipse(surface, (190, 70, 80), (mouth_cx - int(6 * scale_x), mouth_cy - int(1 * scale_y), max(2, int(12 * scale_x)), max(2, int(6 * scale_y))))
+        else:
+            # Fallback legacy 1, 2, 3
+            if mouth_index == 2:
+                pygame.draw.ellipse(surface, (65, 18, 18), (mouth_cx - int(15 * scale_x), mouth_cy - int(4 * scale_y), max(4, int(30 * scale_x)), max(3, int(11 * scale_y))))
+                pygame.draw.rect(surface, (245, 245, 245), (mouth_cx - int(9 * scale_x), mouth_cy - int(4 * scale_y), max(2, int(18 * scale_x)), max(1, int(4 * scale_y))))
+            elif mouth_index == 3:
+                pygame.draw.ellipse(surface, (45, 10, 10), (mouth_cx - int(19 * scale_x), mouth_cy - int(6 * scale_y), max(4, int(38 * scale_x)), max(5, int(18 * scale_y))))
+                pygame.draw.rect(surface, (250, 250, 250), (mouth_cx - int(11 * scale_x), mouth_cy - int(6 * scale_y), max(2, int(22 * scale_x)), max(1, int(5 * scale_y))))
+                pygame.draw.ellipse(surface, (185, 65, 75), (mouth_cx - int(9 * scale_x), mouth_cy + int(4 * scale_y), max(2, int(18 * scale_x)), max(2, int(7 * scale_y))))
+
+    def render(
+        self,
+        surface: Any,
+        target_size: Tuple[int, int],
+        dest: Tuple[int, int],
+        blink_stage: str,
+        closure_progress: float,
+        viseme: str,
+        mouth_index: int,
+        pupil_x: float,
+        pupil_y: float,
+        is_speaking: bool = True,
+        breath_offset: float = 0.0,
+        head_yaw_x: float = 0.0,
+        head_pitch_y: float = 0.0,
+        sprites: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Articulate full face: biological blinks, pupil gaze/saccades, and lipsync mouth."""
+        geometry = self.get_face_geometry(
+            target_size=target_size,
+            dest=dest,
+            head_yaw_x=head_yaw_x,
+            head_pitch_y=head_pitch_y,
+            breath_offset=breath_offset,
+        )
+        self.render_eyes(
+            surface=surface,
+            geometry=geometry,
+            blink_stage=blink_stage,
+            closure_progress=closure_progress,
+            pupil_x=pupil_x,
+            pupil_y=pupil_y,
+            sprites=sprites,
+        )
+        self.render_mouth(
+            surface=surface,
+            geometry=geometry,
+            viseme=viseme,
+            mouth_index=mouth_index,
+            is_speaking=is_speaking,
+            sprites=sprites,
+        )
+        return geometry

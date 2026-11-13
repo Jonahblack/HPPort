@@ -10,6 +10,7 @@ from renderer.animation import (
     TransitionSequencePlayer,
     IdleActivityController,
     VISEME_NAMES,
+    DeskFaceRig,
 )
 from vision.mock import MockVision
 
@@ -142,6 +143,65 @@ class TestAnimationEngine(unittest.TestCase):
         controller._next_action_time = time.monotonic() - 1.0
         action = controller.update()
         self.assertIn(action, ["stir_pot", "taste"])
+
+    def test_desk_face_rig_geometry_scaling(self):
+        rig = DeskFaceRig(face_rel_x=0.5756, face_rel_y=0.3333, reference_canvas_size=(1280, 720))
+        geom = rig.get_face_geometry(target_size=(1280, 720), dest=(0, 0))
+        self.assertEqual(geom["face_center"], (736, 239))
+        self.assertEqual(geom["eye_size"], (18, 11))
+        self.assertLess(geom["left_eye"][0], geom["face_center"][0])
+        self.assertGreater(geom["right_eye"][0], geom["face_center"][0])
+        self.assertGreater(geom["mouth_center"][1], geom["face_center"][1])
+
+    def test_desk_face_rig_renders_visemes_and_blinks_on_surface(self):
+        import pygame
+        rig = DeskFaceRig()
+        surface = pygame.Surface((640, 480))
+        surface.fill((10, 10, 10))
+
+        # Render open eyes with Preston-Blair viseme D
+        geom = rig.render(
+            surface=surface,
+            target_size=(640, 360),
+            dest=(0, 60),
+            blink_stage="open",
+            closure_progress=0.0,
+            viseme="D",
+            mouth_index=3,
+            pupil_x=1.5,
+            pupil_y=-0.8,
+            is_speaking=True,
+        )
+        self.assertIsNotNone(geom)
+        # Sclera / eye pixel should not be background color (10, 10, 10)
+        lx, ly = geom["left_eye"]
+        self.assertNotEqual(surface.get_at((lx, ly))[:3], (10, 10, 10))
+        # Mouth pixel should not be background color
+        mx, my = geom["mouth_center"]
+        self.assertNotEqual(surface.get_at((mx, my))[:3], (10, 10, 10))
+
+    def test_desk_face_rig_closed_blink_and_quiet_mouth(self):
+        import pygame
+        rig = DeskFaceRig()
+        surface = pygame.Surface((640, 480))
+        surface.fill((50, 50, 50))
+
+        # When not speaking and viseme is X, resting mouth is not overwriting
+        geom = rig.render(
+            surface=surface,
+            target_size=(640, 360),
+            dest=(0, 60),
+            blink_stage="closed",
+            closure_progress=1.0,
+            viseme="X",
+            mouth_index=1,
+            pupil_x=0.0,
+            pupil_y=0.0,
+            is_speaking=False,
+        )
+        # Mouth center should remain untouched (50, 50, 50)
+        mx, my = geom["mouth_center"]
+        self.assertEqual(surface.get_at((mx, my))[:3], (50, 50, 50))
 
 
 if __name__ == "__main__":

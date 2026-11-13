@@ -15,8 +15,19 @@ from tts.base import BaseTTS
 class PiperTTS(BaseTTS):
     """Keep a Piper voice in memory, with a standalone executable fallback."""
 
+    VOICE_PERSONAS: Dict[str, str] = {
+        "alan": "en_GB-alan-medium.onnx",
+        "en_gb-alan-medium": "en_GB-alan-medium.onnx",
+        "cori": "en_GB-cori-high.onnx",
+        "en_gb-cori-high": "en_GB-cori-high.onnx",
+        "ryan": "en_US-ryan-medium.onnx",
+        "en_us-ryan-medium": "en_US-ryan-medium.onnx",
+    }
+
     def __init__(self, config: Dict[str, Any]):
+        self.config = config
         tts_cfg = config.get("tts", {})
+        self.voice_persona = str(tts_cfg.get("voice_persona", tts_cfg.get("voice", ""))).strip()
         self.piper_binary = tts_cfg.get("piper_binary_path", "/mnt/portrait/models/piper/piper")
         self.model_path = tts_cfg.get("model_path", "/mnt/portrait/models/piper/en_US-ryan-medium.onnx")
         self.model_config = tts_cfg.get("model_config_path", f"{self.model_path}.json")
@@ -57,7 +68,99 @@ class PiperTTS(BaseTTS):
         self.model_config = os.path.abspath(os.path.expanduser(self.model_config))
         self.cache_dir = os.path.abspath(os.path.expanduser(self.cache_dir))
 
+        self._resolve_voice_model()
         self._find_piper()
+
+    @classmethod
+    def get_supported_personas(cls) -> List[str]:
+        return ["en_GB-alan-medium", "en_GB-cori-high", "en_US-ryan-medium"]
+
+    def get_current_voice(self) -> str:
+        return os.path.basename(self.model_path)
+
+    def _resolve_voice_model(self) -> None:
+        """Resolve requested voice persona or model_path, with fallback to available voices."""
+        requested_filename = None
+        if self.voice_persona:
+            cleaned = self.voice_persona.strip().lower()
+            mapped = self.VOICE_PERSONAS.get(cleaned, self.voice_persona.strip())
+            requested_filename = mapped if mapped.endswith(".onnx") else f"{mapped}.onnx"
+
+        # Search roots for voice models
+        roots = []
+        if os.path.isabs(self.model_path):
+            roots.append(os.path.dirname(self.model_path))
+        models_dir = self.config.get("hardware", {}).get("models_dir")
+        if models_dir:
+            roots.extend([models_dir, os.path.join(models_dir, "piper")])
+        roots.extend([
+            "./models/piper",
+            os.path.expanduser("~/piper"),
+            "/mnt/portrait/models/piper",
+            os.path.dirname(os.path.abspath(self.piper_binary)),
+        ])
+
+        seen = set()
+        unique_roots = []
+        for r in roots:
+            if r and r not in seen and os.path.isdir(r):
+                seen.add(r)
+                unique_roots.append(r)
+
+        # 1. If explicit persona requested, look for it in roots
+        if requested_filename:
+            for root in unique_roots:
+                candidate = os.path.join(root, requested_filename)
+                if os.path.isfile(candidate):
+                    self.model_path = os.path.abspath(candidate)
+                    cfg_candidate = f"{self.model_path}.json"
+                    self.model_config = cfg_candidate if os.path.isfile(cfg_candidate) else self.model_config
+                    print(f"[TTS] Selected voice persona '{self.voice_persona}': {self.model_path}")
+                    return
+
+        # 2. If configured model_path exists on disk, keep it
+        if os.path.isfile(self.model_path):
+            return
+
+        # 3. If missing, look for fallback personas in order:
+        # Alan (British medium), Cori (British high), Ryan (US medium)
+        fallback_order = [
+            "en_GB-alan-medium.onnx",
+            "en_GB-cori-high.onnx",
+            "en_US-ryan-medium.onnx",
+        ]
+        for fallback_name in fallback_order:
+            if fallback_name == os.path.basename(self.model_path) or fallback_name == requested_filename:
+                continue
+            for root in unique_roots:
+                candidate = os.path.join(root, fallback_name)
+                if os.path.isfile(candidate):
+                    print(
+                        f"[TTS] Voice model not found at '{self.model_path}'. "
+                        f"Falling back to available persona '{fallback_name}': {candidate}"
+                    )
+                    self.model_path = os.path.abspath(candidate)
+                    cfg_candidate = f"{self.model_path}.json"
+                    self.model_config = cfg_candidate if os.path.isfile(cfg_candidate) else self.model_config
+                    return
+
+        # 4. Any .onnx file found in roots
+        for root in unique_roots:
+            try:
+                for fname in sorted(os.listdir(root)):
+                    if fname.endswith(".onnx"):
+                        candidate = os.path.join(root, fname)
+                        if os.path.isfile(candidate):
+                            print(
+                                f"[TTS] Voice model not found at '{self.model_path}'. "
+                                f"Falling back to available voice file '{fname}': {candidate}"
+                            )
+                            self.model_path = os.path.abspath(candidate)
+                            cfg_candidate = f"{self.model_path}.json"
+                            self.model_config = cfg_candidate if os.path.isfile(cfg_candidate) else self.model_config
+                            return
+            except OSError:
+                continue
 
     @staticmethod
     def _is_executable_file(path: str) -> bool:

@@ -390,6 +390,98 @@ class TestSTTTTS(unittest.TestCase):
             self.assertGreater(duration, 0)
             self.assertEqual(tts.last_engine, "mock_fallback")
 
+    def test_british_voice_personas_selectable(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            alan_path = os.path.join(tmpdir, "en_GB-alan-medium.onnx")
+            cori_path = os.path.join(tmpdir, "en_GB-cori-high.onnx")
+            with open(alan_path, "wb") as f:
+                f.write(b"alan model")
+            with open(cori_path, "wb") as f:
+                f.write(b"cori model")
+
+            # Select via full persona name
+            tts_alan = PiperTTS({
+                "tts": {
+                    "voice_persona": "en_GB-alan-medium",
+                    "model_path": alan_path,
+                }
+            })
+            self.assertEqual(os.path.basename(tts_alan.model_path), "en_GB-alan-medium.onnx")
+            self.assertEqual(tts_alan.get_current_voice(), "en_GB-alan-medium.onnx")
+
+            # Select via short alias
+            tts_cori = PiperTTS({
+                "tts": {
+                    "voice_persona": "cori",
+                    "model_path": os.path.join(tmpdir, "placeholder.onnx"),
+                }
+            })
+            self.assertEqual(os.path.basename(tts_cori.model_path), "en_GB-cori-high.onnx")
+
+    def test_voice_persona_fallback_when_requested_model_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Only ryan-medium is on disk
+            ryan_path = os.path.join(tmpdir, "en_US-ryan-medium.onnx")
+            with open(ryan_path, "wb") as f:
+                f.write(b"ryan model")
+
+            # User requested alan, which doesn't exist in tmpdir
+            missing_alan = os.path.join(tmpdir, "en_GB-alan-medium.onnx")
+            tts = PiperTTS({
+                "tts": {
+                    "voice_persona": "en_GB-alan-medium",
+                    "model_path": missing_alan,
+                }
+            })
+            # Should have found ryan in the directory as fallback
+            self.assertEqual(os.path.basename(tts.model_path), "en_US-ryan-medium.onnx")
+
+    def test_filler_manager_precaches_and_rotates_character_fillers(self):
+        from tts.filler import FillerManager, DEFAULT_FILLERS
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_tts = MockTTS()
+            mock_lipsync = Mock()
+            mock_lipsync.analyze_wav.return_value = [
+                {"viseme": "O", "amplitude": 0.5},
+                {"viseme": "X", "amplitude": 0.0},
+            ]
+
+            config = {
+                "hardware": {"cache_dir": tmpdir},
+                "tts": {
+                    "cache_dir": os.path.join(tmpdir, "tts_cache"),
+                    "fillers": [
+                        "Hmm, let me consider...",
+                        "By Gryffindor's sword...",
+                        "An intriguing query, traveler!",
+                    ],
+                },
+            }
+
+            manager = FillerManager(config, mock_tts, lipsync_engine=mock_lipsync)
+            manager.warmup()
+
+            self.assertEqual(len(manager._cache), 3)
+            mock_lipsync.analyze_wav.assert_called()
+
+            # Retrieve fillers
+            f1 = manager.get_filler()
+            f2 = manager.get_filler()
+            f3 = manager.get_filler()
+            f4 = manager.get_filler()
+
+            self.assertEqual(f1["text"], "Hmm, let me consider...")
+            self.assertEqual(f2["text"], "By Gryffindor's sword...")
+            self.assertEqual(f3["text"], "An intriguing query, traveler!")
+            # Rotates back without immediate repeat
+            self.assertEqual(f4["text"], "Hmm, let me consider...")
+
+            self.assertTrue(os.path.isfile(f1["path"]))
+            self.assertGreater(f1["duration"], 0)
+            self.assertEqual(len(f1["frames"]), 2)
+
+
 
 if __name__ == "__main__":
     unittest.main()

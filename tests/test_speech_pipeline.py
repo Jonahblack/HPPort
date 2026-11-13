@@ -1,4 +1,5 @@
 import threading
+import time
 import unittest
 
 from speech_pipeline import SpeechPipelineError, run_speech_pipeline
@@ -171,3 +172,97 @@ class TestSpeechPipeline(unittest.TestCase):
             release_play.set()
             worker.join(1)
         self.assertFalse(worker.is_alive())
+
+    def test_filler_plays_immediately_while_generation_and_synthesis_prepare_in_background(self):
+        filler_started = threading.Event()
+        release_filler = threading.Event()
+        synthesis_during_filler = threading.Event()
+        played = []
+        discarded = []
+
+        filler_item = {"text": "Hmm, let me consider...", "path": "mock_filler.wav"}
+
+        def prepare(text):
+            # Assert filler has started while synthesis is running
+            self.assertTrue(filler_started.wait(2.0))
+            synthesis_during_filler.set()
+            return f"prep_{text}"
+
+        def play_filler(f):
+            played.append(f["text"])
+            filler_started.set()
+            # Hold playback to ensure background synthesis runs concurrently
+            self.assertTrue(release_filler.wait(2.0), "Filler playback timeout")
+
+        def play(p):
+            played.append(p)
+
+        def clauses():
+            yield "First sentence."
+            yield "Second sentence."
+
+        results = []
+        def target():
+            results.append(run_speech_pipeline(
+                clauses(),
+                prepare=prepare,
+                play=play,
+                discard=discarded.append,
+                cancelled=threading.Event(),
+                filler=filler_item,
+                play_filler=play_filler,
+            ))
+
+        t = threading.Thread(target=target)
+        t.start()
+
+        self.assertTrue(filler_started.wait(1.0), "Filler did not start immediately")
+        self.assertTrue(synthesis_during_filler.wait(1.0), "Synthesis did not run concurrently during filler")
+        self.assertEqual(played, ["Hmm, let me consider..."])
+
+        # Release filler playback now that background synthesis is confirmed
+        release_filler.set()
+        t.join(2.0)
+        self.assertFalse(t.is_alive())
+
+        self.assertEqual(played, ["Hmm, let me consider...", "prep_First sentence.", "prep_Second sentence."])
+        self.assertEqual(results[0], ["First sentence.", "Second sentence."])  # Filler not in spoken response
+        self.assertEqual(discarded, ["prep_First sentence.", "prep_Second sentence."])
+
+    def test_filler_cancellation_stops_before_response_playback(self):
+        cancelled = threading.Event()
+        played = []
+
+        def play_filler(f):
+            played.append(f["text"])
+            cancelled.set()
+
+        spoken = run_speech_pipeline(
+            iter(["One", "Two"]),
+            prepare=str,
+            play=played.append,
+            discard=lambda _: None,
+            cancelled=cancelled,
+            filler={"text": "Aha!"},
+            play_filler=play_filler,
+        )
+        self.assertEqual(played, ["Aha!"])
+        self.assertEqual(spoken, [])
+
+    def test_filler_playback_failure_raises_speech_pipeline_error(self):
+        def failing_filler(_f):
+            raise RuntimeError("Audio device lost during filler")
+
+        with self.assertRaises(SpeechPipelineError) as ctx:
+            run_speech_pipeline(
+                iter(["One"]),
+                prepare=str,
+                play=lambda _: None,
+                discard=lambda _: None,
+                cancelled=threading.Event(),
+                filler={"text": "By Gryffindor's sword..."},
+                play_filler=failing_filler,
+            )
+        self.assertEqual(ctx.exception.stage, "playback")
+        self.assertEqual(ctx.exception.spoken, [])
+

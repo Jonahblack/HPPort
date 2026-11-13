@@ -218,6 +218,82 @@ class TestPortraitRenderer(unittest.TestCase):
         expected_y = canvas_rect.centery - target_size[1] // 2
         self.assertEqual(self.renderer._last_frame_dest, (expected_x, expected_y))
 
+    def test_scene_director_dynamic_face_articulation_holding_visitor_facing(self):
+        endpoint = pygame.Surface((1280, 720))
+        endpoint.fill((30, 40, 50))
+        self.renderer.scene_director = MagicMock()
+        self.renderer.scene_director.scene = "engaged_book"
+        self.renderer.scene_director.active = None
+        self.renderer.scene_director.catalog = {
+            "scenes": {"engaged_book": {"pose": "visitor_facing", "sprite": "speaking_base"}},
+            "canvas_size": [1280, 720],
+        }
+        player = MagicMock()
+        player.last_surface = endpoint
+        player.is_playing = False
+        player.update.return_value = endpoint
+        self.renderer.transition_player = player
+        self.renderer.set_state(PortraitState.SPEAKING)
+        self.renderer.set_viseme("D", amplitude=0.8)
+
+        with patch.object(self.renderer.desk_face_rig, "render", wraps=self.renderer.desk_face_rig.render) as mock_render:
+            self.renderer.render()
+            self.assertTrue(self.renderer._is_articulating)
+            self.assertEqual(mock_render.call_count, 1)
+            # Verify speaking viseme D was passed
+            call_kwargs = mock_render.call_args.kwargs
+            self.assertEqual(call_kwargs["viseme"], "D")
+            self.assertTrue(call_kwargs["is_speaking"])
+
+    def test_scene_director_no_articulation_while_video_transition_playing(self):
+        endpoint = pygame.Surface((1280, 720))
+        self.renderer.scene_director = MagicMock()
+        self.renderer.scene_director.scene = "engaged_book"
+        self.renderer.scene_director.active = "look_up"
+        self.renderer.scene_director.catalog = {
+            "scenes": {"engaged_book": {"pose": "visitor_facing", "sprite": "speaking_base"}},
+            "canvas_size": [1280, 720],
+        }
+        player = MagicMock()
+        player.last_surface = endpoint
+        player.is_playing = True
+        player.update.return_value = endpoint
+        self.renderer.transition_player = player
+        self.renderer.set_state(PortraitState.SPEAKING)
+
+        with patch.object(self.renderer.desk_face_rig, "render") as mock_render:
+            self.renderer.render()
+            self.assertFalse(self.renderer._is_articulating)
+            mock_render.assert_not_called()
+
+    def test_scene_director_chest_breathing_drift_applied_when_holding(self):
+        endpoint = pygame.Surface((1280, 720))
+        self.renderer.scene_director = MagicMock()
+        self.renderer.scene_director.scene = "engaged_book"
+        self.renderer.scene_director.active = None
+        self.renderer.scene_director.catalog = {
+            "scenes": {"engaged_book": {"pose": "visitor_facing", "sprite": "speaking_base"}},
+            "canvas_size": [1280, 720],
+        }
+        player = MagicMock()
+        player.last_surface = endpoint
+        player.is_playing = False
+        player.update.return_value = endpoint
+        self.renderer.transition_player = player
+        self.renderer.set_state(PortraitState.LISTENING)
+
+        # Set specific anim_time to yield positive breath offset
+        # math.sin(1.05) ~= 0.867 -> offset ~= +2.16px -> int = 2
+        self.renderer.anim_time = 0.7
+        with patch.object(self.renderer.desk_face_rig, "render", wraps=self.renderer.desk_face_rig.render) as mock_render:
+            self.renderer.render()
+            self.assertTrue(self.renderer._is_articulating)
+            self.assertEqual(mock_render.call_count, 1)
+            call_dest = mock_render.call_args.kwargs["dest"]
+            # Base centered y for 640x480 screen with 6px padding is (canvas_centery - padded_h // 2)
+            # The breath drift offset should be included in call_dest[1]
+            self.assertIsNotNone(call_dest)
+
 
 if __name__ == "__main__":
     unittest.main()

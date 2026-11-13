@@ -40,6 +40,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_listen_duration_seconds": 15.0,
         "max_consecutive_silence": 2,
         "cooldown_duration_seconds": 8.0,
+        "presence_loss_frames": 5,
+        "presence_loss_cooldown_seconds": 1.0,
+        "presence_loss_farewell": "Farewell, wanderer...",
     },
     "vision": {
         "driver": "hailo",
@@ -95,6 +98,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "tts": {
         "driver": "piper",
+        "voice_persona": "en_GB-alan-medium",  # Selectable: en_GB-alan-medium, en_GB-cori-high, en_US-ryan-medium
         "runtime": "auto",
         "warmup_enabled": True,
         "synthesis_timeout_seconds": 30.0,

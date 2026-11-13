@@ -286,7 +286,13 @@ class LocalSTT(BaseSTT):
             time.sleep(1.2)
             return None
 
-        import speech_recognition as sr  # type: ignore
+        try:
+            import speech_recognition as sr  # type: ignore
+        except Exception:
+            sr = None
+
+        wait_timeout_err = (sr.WaitTimeoutError,) if sr is not None else ()
+        unknown_value_err = (sr.UnknownValueError,) if sr is not None else ()
 
         print(
             f"[STT] Listening for user speech "
@@ -331,10 +337,10 @@ class LocalSTT(BaseSTT):
             print(f"[STT] Fallback recognizer ({duration:.2f}s): \"{text}\"")
             return text
 
-        except sr.WaitTimeoutError:
+        except wait_timeout_err:
             print("[STT] Silence / timeout (no speech detected).")
             return None
-        except sr.UnknownValueError:
+        except unknown_value_err:
             print("[STT] Audio unclear / incomprehensible.")
             return None
         except Exception as exc:
