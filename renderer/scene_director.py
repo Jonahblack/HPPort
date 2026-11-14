@@ -1,16 +1,18 @@
 """Main-thread scene intentions, compatible routes, and source-endpoint checkpoints."""
 
 from collections import deque
+import datetime
 import random
 import time
 
 
 class SceneDirector:
-    def __init__(self, catalog, player, config=None, preview=False, clock=time.monotonic):
+    def __init__(self, catalog, player, config=None, preview=False, clock=time.monotonic, wall_clock=None):
         self.catalog, self.player = catalog, player
         self.config = config or {}
         self.preview = preview
         self.clock = clock
+        self.wall_clock = wall_clock
         self.scene = catalog["initial_scene"]
         self.clips = {c["id"]: c for c in catalog["clips"]}
         self.disabled = set()
@@ -24,6 +26,25 @@ class SceneDirector:
         self._preview_action = None
         self._idle_suspended = False
         self._last_action = None
+
+        # Schedule and absence configuration
+        self.schedule_config = self.config.get("schedule", {})
+        self.schedule_enabled = bool(self.schedule_config.get("enabled", False))
+        self.night_start_hour = int(self.schedule_config.get("night_start_hour", 22))
+        self.night_end_hour = int(self.schedule_config.get("night_end_hour", 7))
+        self.night_post_conversation_dwell_seconds = float(
+            self.schedule_config.get("night_post_conversation_dwell_seconds", 90)
+        )
+        self.prolonged_absence_seconds = float(
+            self.schedule_config.get(
+                "prolonged_absence_seconds",
+                self.schedule_config.get("inactivity_timeout_seconds", 0),
+            )
+        )
+        self._night_dwell_until = None
+        self._last_active_time = self.clock()
+        self.is_present = True
+
         self._schedule_idle()
         self._schedule_activity()
         for spec in self.clips.values():
@@ -47,6 +68,10 @@ class SceneDirector:
         return spec["id"] not in self.disabled and self.player.has_sequence(spec["id"]) and (self.preview or spec.get("runtime_enabled", False))
 
     def _route(self, start, target):
+        if start == "empty_room":
+            start = "away"
+        if target == "empty_room":
+            target = "away"
         pending = deque([(start, [])])
         visited = {start}
         while pending:
@@ -60,6 +85,76 @@ class SceneDirector:
                     pending.append((dest, route + [spec["id"]]))
         return None
 
+    def get_time(self):
+        if self.wall_clock is not None:
+            val = self.wall_clock()
+            if isinstance(val, (int, float)):
+                if isinstance(val, int) and 0 <= val < 24:
+                    return val
+                return datetime.datetime.fromtimestamp(val)
+            return val
+        return datetime.datetime.now()
+
+    def is_night(self, current_time=None):
+        if current_time is None:
+            current_time = self.get_time()
+        if isinstance(current_time, int):
+            hour = current_time
+        elif hasattr(current_time, "hour"):
+            hour = current_time.hour
+        elif isinstance(current_time, float):
+            hour = datetime.datetime.fromtimestamp(current_time).hour
+        else:
+            hour = 12
+
+        start = self.night_start_hour
+        end = self.night_end_hour
+        if start > end:
+            return hour >= start or hour < end
+        elif start < end:
+            return start <= hour < end
+        else:
+            return False
+
+    @property
+    def is_night_active(self):
+        return self.schedule_enabled and self.is_night()
+
+    @property
+    def is_away(self):
+        return self.scene in ("away", "empty_room")
+
+    @property
+    def is_empty_room(self):
+        return self.is_away
+
+    @property
+    def is_prolonged_absence(self):
+        if self.prolonged_absence_seconds > 0 and not self.engaging:
+            return (self.clock() - self._last_active_time) >= self.prolonged_absence_seconds
+        return False
+
+    @property
+    def should_be_away(self):
+        if self.engaging:
+            return False
+        if self.is_night_active:
+            if self._night_dwell_until is not None and self.clock() < self._night_dwell_until:
+                return False
+            return True
+        if self.is_prolonged_absence:
+            return True
+        return False
+
+    def set_active(self):
+        self._last_active_time = self.clock()
+        self.is_present = True
+
+    def set_presence(self, present: bool):
+        self.is_present = bool(present)
+        if present:
+            self.set_active()
+
     @property
     def ready_for_speech(self):
         return self.engaging and self.scene == self.target and self.active is None and not self.error
@@ -71,9 +166,18 @@ class SceneDirector:
     def request_engagement(self):
         if self.engaging:
             return
-        self.return_scene = self.target or (self.clips[self.active]["exit_scene"] if self.active else self.scene)
-        self.return_scene = self.catalog["scenes"].get(self.return_scene, {}).get("return_scene", self.return_scene)
-        destination = self.catalog["scenes"].get(self.return_scene, {}).get("engagement_scene")
+        self._last_active_time = self.clock()
+        self._night_dwell_until = None
+        current = self.target or (self.clips[self.active]["exit_scene"] if self.active else self.scene)
+        if current in ("away", "empty_room"):
+            self.return_scene = "away"
+            destination = "neutral"
+        elif current == "neutral" and self.is_night_active:
+            self.return_scene = "away"
+            destination = "neutral"
+        else:
+            self.return_scene = self.catalog["scenes"].get(current, {}).get("return_scene", current)
+            destination = self.catalog["scenes"].get(self.return_scene, {}).get("engagement_scene")
         self.target = destination or "engaged_book"
         self.engaging = True
         self._preview_action = None
@@ -81,22 +185,37 @@ class SceneDirector:
 
     def request_return(self):
         self.engaging = False
-        self.target = self.return_scene
+        self._last_active_time = self.clock()
         self.error = None
+        if self.schedule_enabled and self.is_night():
+            if self.scene in ("neutral", "engaged_neutral", "away", "empty_room") or self.return_scene in ("away", "empty_room"):
+                if self.night_post_conversation_dwell_seconds > 0:
+                    self._night_dwell_until = self.clock() + self.night_post_conversation_dwell_seconds
+                    self.target = "neutral"
+                    return
+        self._night_dwell_until = None
+        self.target = self.return_scene
 
     def request_action(self, name):
         if name not in self.clips:
-            alias = {"return_to_tinker_box": "return_to_tinker", "look_up_tinker": "look_up_from_tinker_box"}.get(name)
+            alias = {
+                "return_to_tinker_box": "return_to_tinker",
+                "look_up_tinker": "look_up_from_tinker_box",
+                "empty_room": "walk_away",
+                "away": "walk_away",
+            }.get(name)
             if alias in self.clips:
                 name = alias
         spec = self.clips.get(name)
         if self.engaging or self.active or not spec or not self._enabled(spec):
             return False
-        if self._route(self.scene, spec["entry_scene"]) is None:
+        entry = spec["entry_scene"]
+        if self._route(self.scene, entry) is None:
             return False
+        self._last_active_time = self.clock()
         self.error = None
         self._preview_action = name
-        self.target = spec["entry_scene"]
+        self.target = entry
         return True
 
     def _start(self, name):
@@ -163,6 +282,27 @@ class SceneDirector:
             self._schedule_idle()
             self._schedule_activity()
             self._idle_suspended = False
+
+        # Night / Away Schedule and Prolonged Inactivity
+        if self.should_be_away:
+            if not self.is_away:
+                self.target = "away"
+                route = self._route(self.scene, self.target)
+                if route:
+                    self._start(route[0])
+                return
+            else:
+                self._schedule_idle()
+                self._schedule_activity()
+                return
+        elif self.is_away:
+            daytime = self.catalog.get("initial_scene", "reading")
+            self.target = daytime
+            route = self._route(self.scene, self.target)
+            if route:
+                self._start(route[0])
+            return
+
         if self.clock() >= self.next_activity:
             allowed = self.config.get("activities", ["reading", "tinkering"])
             candidates = []

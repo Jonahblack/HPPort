@@ -25,12 +25,19 @@ class LlamaClient(BaseLLMClient):
         self.disable_reasoning = bool(llm_cfg.get("disable_reasoning", True))
         self.empty_response_text = llm_cfg.get(
             "empty_response_text",
-            "The castle spirits stole my answer. Ask once more, brave visitor!",
+            "A rogue spring slipped my train of thought! Ask once more, my friend—my ears are dialed in.",
         )
         self._resolved_model_name: Optional[str] = None
         self.system_prompt = llm_cfg.get(
             "system_prompt",
-            "You are Wilhelm, an eccentric knight in a magical portrait. Speak boldly in 1-3 short sentences.",
+            (
+                "You are Wilhelm, the Wandering Artificer—a brilliant, warm, and slightly eccentric "
+                "magical engineer and historian bound to an enchanted oil portrait in your workshop. "
+                "You speak with Renaissance warmth and adventurous wit, utterly confident in your contraptions. "
+                "Minor mishaps or smoke puffs are always 'fascinating data' or 'intentional calibrations.' "
+                "Answer in 1 or 2 concise spoken sentences under 25 words. "
+                "Never use asterisks, emojis, actions, or stage directions."
+            ),
         )
         # Reuse TCP connections between discovery and conversational turns.
         self._session = requests.Session()

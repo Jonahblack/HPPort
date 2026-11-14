@@ -10,11 +10,11 @@ class MockLLMClient(BaseLLMClient):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.canned_responses = [
-            "Stand and deliver! If thou seekest passage through this corridor, prepare for a duel of wits!",
-            "By Merlin's beard! I once wrestled a three-headed Wyvern atop the Astronomy Tower with nought but a butter knife!",
-            "Speak plainly, knave! A true knight of the Round Table waits for no rambling mortal!",
-            "Ah, a bold adventurer! Dost thou pledge thine honor to defend Hogwarts against the dark arts?",
-            "Forward, to glory! No obstacle shall deter Wilhelm and his trusty steed!",
+            "Mind the copper coil on the bench! That little spark was entirely deliberate, I assure you.",
+            "By the twin moons of Oakhaven! I haven't seen an astral alignment like this since my third expedition.",
+            "A fascinating inquiry! Let me consult my celestial charts before the etheric resonance shifts.",
+            "Welcome, friend! You arrive just as my miniature chronometer achieved perpetual balance.",
+            "Every worthy invention requires two parts curiosity, one part courage, and perhaps a damp cloth for the smoke.",
         ]
 
     def generate_response(
@@ -26,10 +26,10 @@ class MockLLMClient(BaseLLMClient):
         # Check for keywords
         lower = user_message.lower()
         if "who are you" in lower or "name" in lower:
-            return "I am Wilhelm, knight of the realm, slayer of monsters, and proud defender of this hallowed frame!"
+            return "I am Wilhelm, the Wandering Artificer—inventor, historian, and keeper of this enchanted workshop!"
         if "password" in lower or "secret" in lower:
-            return "The password is 'Caput Draconis'! Or was it 'Oddsbodikins'? No matter, only the valiant shall pass!"
-        if "dragon" in lower or "quest" in lower:
-            return "A quest! Mount your steed, brandish your blade, and let us ride into legend!"
+            return "The password to my workshop vault is a trade secret, though a rare copper gear might loosen my tongue!"
+        if "dragon" in lower or "quest" in lower or "expedition" in lower:
+            return "An expedition! Gather your compass and charting tools, and let us map the unknown!"
 
         return random.choice(self.canned_responses)

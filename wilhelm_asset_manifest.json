@@ -64,6 +64,15 @@
       "box": "absent",
       "pose": "empty_room",
       "engagement_scene": "neutral"
+    },
+    "empty_room": {
+      "activity": "away",
+      "return_scene": "away",
+      "sprite": "empty_room",
+      "book": "absent",
+      "box": "absent",
+      "pose": "empty_room",
+      "engagement_scene": "neutral"
     }
   },
   "clips": [

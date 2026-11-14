@@ -29,6 +29,8 @@ class PortraitRenderer:
         self.asset_mode = str(self.config.get("asset_mode", "layered")).strip().lower()
         self.camera_motion = bool(self.config.get("camera_motion", True))
         self.ambient_motes = bool(self.config.get("ambient_motes", True))
+        self.show_frame = bool(self.config.get("show_frame", False))
+        self.show_status_plate = bool(self.config.get("show_status_plate", True))
 
         # Gaze tracking and interactive presence settings
         self.gaze_tracking_enabled = bool(self.config.get("gaze_tracking_enabled", True))
@@ -95,10 +97,36 @@ class PortraitRenderer:
 
         # Sprites dictionary
         self.sprites: Dict[str, Optional[pygame.Surface]] = {}
-        self._scaled_sprite_cache: Dict[Tuple[str, int, int], pygame.Surface] = {}
+        self._scaled_sprite_cache: OrderedDict[Tuple[str, int, int], pygame.Surface] = OrderedDict()
         self.transition_player = TransitionSequencePlayer(fps=self.fps)
         self.idle_controller = IdleActivityController()
         self.scene_director = None
+
+        # Cached geometry, surfaces, and fallback crops for Pi 5 optimization
+        self._fallback_crop_source = None
+        self._fallback_crop_aspect = None
+        self._fallback_crop_surface = None
+        self._frame_surface = None
+        self._frame_rect = None
+        self._bevel_rect_1 = None
+        self._bevel_rect_2 = None
+        self._canvas_rect = None
+        self._plate_rect = None
+        self._plate_vu_rect = None
+        self._plate_w = 0
+        self._plate_h = 0
+        self._plate_x = 0
+        self._plate_y = 0
+
+        self._cached_scene_name = None
+        self._cached_scene = None
+        self._cached_fallback = None
+        self._cached_bw_bh = None
+        self._cached_target_size = None
+        self._cached_padded_size = None
+        self._cached_dest = None
+
+        self._update_geometry(self.width, self.height)
 
         # Desk View face articulation settings
         self.desk_view_config = self.config.get("desk_view", {})
@@ -280,12 +308,65 @@ class PortraitRenderer:
                     self.transition_player.register_sequence(seq_id, dir_path, fps=24)
                     print(f"[Renderer] Registered idle animation '{seq_id}' from {dir_path}")
 
+    def _update_geometry(self, w: int, h: int) -> None:
+        """Precompute frame, canvas, and plate geometry when viewport size changes."""
+        self._scaled_sprite_cache.clear()
+        self._viewport_size = (w, h)
+        self._cached_scene_name = None  # Force recomputation of scene target_size
+
+        if self.show_frame:
+            frame_margin_x = int(w * 0.04)
+            frame_margin_y = int(h * 0.04)
+            self._frame_margin_x = frame_margin_x
+            self._frame_margin_y = frame_margin_y
+            self._frame_rect = pygame.Rect(frame_margin_x, frame_margin_y, w - frame_margin_x * 2, h - frame_margin_y * 2)
+            self._bevel_rect_1 = self._frame_rect.inflate(-16, -16)
+            self._bevel_rect_2 = self._frame_rect.inflate(-24, -24)
+            self._canvas_rect = self._frame_rect.inflate(-36, -36)
+
+            # Precompute static ornate frame surface for fast 1-blit background rendering
+            frame_surf = pygame.Surface((w, h))
+            if pygame.display.get_surface() is not None:
+                frame_surf = frame_surf.convert()
+            frame_surf.fill((20, 18, 16))
+            pygame.draw.rect(frame_surf, (75, 55, 25), self._frame_rect, width=18, border_radius=12)
+            pygame.draw.rect(frame_surf, (190, 150, 50), self._bevel_rect_1, width=6, border_radius=8)
+            pygame.draw.rect(frame_surf, (230, 195, 75), self._bevel_rect_2, width=2, border_radius=6)
+            pygame.draw.rect(frame_surf, (28, 24, 22), self._canvas_rect)
+            self._frame_surface = frame_surf
+        else:
+            self._frame_margin_x = 0
+            self._frame_margin_y = 0
+            self._frame_rect = pygame.Rect(0, 0, w, h)
+            self._bevel_rect_1 = None
+            self._bevel_rect_2 = None
+            self._canvas_rect = pygame.Rect(0, 0, w, h)
+            self._frame_surface = None
+
+        # Status plate geometry
+        plate_w = max(80, min(w - 64, 860))
+        plate_h = 42
+        plate_x = (w // 2) - plate_w // 2
+        plate_y = h - 54 if not self.show_frame else h - self._frame_margin_y - 65
+        self._plate_rect = pygame.Rect(plate_x, plate_y, plate_w, plate_h)
+        self._plate_w = plate_w
+        self._plate_h = plate_h
+        self._plate_x = plate_x
+        self._plate_y = plate_y
+        self._plate_vu_rect = pygame.Rect(plate_x + plate_w - 160, plate_y + 14, 140, 14)
+
     def _scaled_sprite(self, key: str, sprite: pygame.Surface, size: Tuple[int, int]) -> pygame.Surface:
+        if sprite.get_size() == size:
+            return sprite
         cache_key = (key, size[0], size[1])
         cached = self._scaled_sprite_cache.get(cache_key)
         if cached is None:
             cached = pygame.transform.smoothscale(sprite, size)
             self._scaled_sprite_cache[cache_key] = cached
+            if len(self._scaled_sprite_cache) > 32:
+                self._scaled_sprite_cache.popitem(last=False)
+        else:
+            self._scaled_sprite_cache.move_to_end(cache_key)
         return cached
 
     def _text(self, font, text: str, color: Tuple[int, int, int]) -> pygame.Surface:
@@ -645,9 +726,9 @@ class PortraitRenderer:
         w, h = self.screen.get_size()
         center_x = w // 2
         if (w, h) != self._viewport_size:
-            # Resizing must not retain a full set of paintings at every past size.
-            self._scaled_sprite_cache.clear()
-            self._viewport_size = (w, h)
+            self._update_geometry(w, h)
+        frame_margin_x = self._frame_margin_x
+        frame_margin_y = self._frame_margin_y
         now = time.monotonic()
         delta = min(0.1, max(0.0, now - self._last_render_time))
         self._last_render_time = now
@@ -680,22 +761,12 @@ class PortraitRenderer:
         bg_drift_y = -self.current_gaze_y * 3.5
         breath_offset = math.sin(self.anim_time * 1.5) * 2.5
 
-        # 1. Dark Castle Wall Background
-        self.screen.fill((20, 18, 16))
-
-        # 2. Ornate Picture Frame (Outer and Gilded Inner Molding)
-        frame_margin_x = int(w * 0.04)
-        frame_margin_y = int(h * 0.04)
-        frame_rect = pygame.Rect(frame_margin_x, frame_margin_y, w - frame_margin_x * 2, h - frame_margin_y * 2)
-        
-        # Outer Gold Bevel
-        pygame.draw.rect(self.screen, (75, 55, 25), frame_rect, width=18, border_radius=12)
-        pygame.draw.rect(self.screen, (190, 150, 50), frame_rect.inflate(-16, -16), width=6, border_radius=8)
-        pygame.draw.rect(self.screen, (230, 195, 75), frame_rect.inflate(-24, -24), width=2, border_radius=6)
-
-        # Inner Canvas Viewport
-        canvas_rect = frame_rect.inflate(-36, -36)
-        pygame.draw.rect(self.screen, (28, 24, 22), canvas_rect)
+        # 1 & 2. Blit pre-rendered ornate frame with inner canvas viewport (single fast blit)
+        canvas_rect = self._canvas_rect
+        if self._frame_surface is not None:
+            self.screen.blit(self._frame_surface, (0, 0))
+        else:
+            self.screen.fill((20, 18, 16))
 
         # 3. Layered Sprite Rendering (or Procedural fallback)
         bg_sprite = self.sprites.get("background")
@@ -723,14 +794,32 @@ class PortraitRenderer:
             self.screen.blit(scaled_bg, (bg_dest_x, bg_dest_y))
 
         if self.scene_director:
-            scene = self.scene_director.catalog["scenes"].get(self.scene_director.scene, {})
-            fallback = self.sprites.get(scene.get("sprite", "wilhelm_reading")) or base_sprite
-            # One scene canvas prevents a small aspect-ratio change between masters and video.
-            bw, bh = self.scene_director.catalog.get("canvas_size", [1280, 720])
-            fit = min if self.config.get("scene_fit", "contain") == "contain" else max
-            scale = fit(canvas_rect.width / bw, canvas_rect.height / bh)
-            target_size = (max(1, round(bw * scale)), max(1, round(bh * scale)))
-            dest = (canvas_rect.centerx - target_size[0] // 2, canvas_rect.centery - target_size[1] // 2)
+            current_scene_name = self.scene_director.scene
+            if current_scene_name != self._cached_scene_name:
+                scene = self.scene_director.catalog["scenes"].get(current_scene_name, {})
+                fallback = self.sprites.get(scene.get("sprite", "wilhelm_reading")) or base_sprite
+                bw, bh = self.scene_director.catalog.get("canvas_size", [1280, 720])
+                fit = min if self.config.get("scene_fit", "contain") == "contain" else max
+                scale = fit(canvas_rect.width / bw, canvas_rect.height / bh)
+                target_size = (max(1, round(bw * scale)), max(1, round(bh * scale)))
+                dest = (canvas_rect.centerx - target_size[0] // 2, canvas_rect.centery - target_size[1] // 2)
+                pad = 6
+                padded_size = (target_size[0] + pad, target_size[1] + pad)
+
+                self._cached_scene_name = current_scene_name
+                self._cached_scene = scene
+                self._cached_fallback = fallback
+                self._cached_bw_bh = (bw, bh)
+                self._cached_target_size = target_size
+                self._cached_padded_size = padded_size
+                self._cached_dest = dest
+
+            scene = self._cached_scene
+            fallback = self._cached_fallback
+            bw, bh = self._cached_bw_bh
+            target_size = self._cached_target_size
+            padded_size = self._cached_padded_size
+            dest = self._cached_dest
             self._last_frame_dest = dest
 
             # Detect whether holding a visitor-facing scene during conversation
@@ -742,8 +831,6 @@ class PortraitRenderer:
 
             if can_articulate:
                 # Apply subtle sinusoidal chest breathing drift (2-3px vertical offset)
-                pad = 6
-                padded_size = (target_size[0] + pad, target_size[1] + pad)
                 dest_x = canvas_rect.centerx - padded_size[0] // 2
                 dest_y = canvas_rect.centery - padded_size[1] // 2 + int(breath_offset)
                 active_size = padded_size
@@ -753,18 +840,23 @@ class PortraitRenderer:
                 active_dest = dest
 
             if self.transition_player.last_surface is None and fallback is not None:
-                crop = fallback.get_rect()
-                if crop.width / crop.height > bw / bh:
-                    crop.width = round(crop.height * bw / bh)
-                else:
-                    crop.height = round(crop.width * bh / bw)
-                crop.center = fallback.get_rect().center
-                fallback = fallback.subsurface(crop)
+                if self._fallback_crop_source is not fallback or self._fallback_crop_aspect != (bw, bh):
+                    crop = fallback.get_rect()
+                    if crop.width / crop.height > bw / bh:
+                        crop.width = round(crop.height * bw / bh)
+                    else:
+                        crop.height = round(crop.width * bh / bw)
+                    crop.center = fallback.get_rect().center
+                    self._fallback_crop_surface = fallback.subsurface(crop)
+                    self._fallback_crop_source = fallback
+                    self._fallback_crop_aspect = (bw, bh)
+                fallback = self._fallback_crop_surface
                 self.transition_player._outgoing = fallback
+
             surface = self.transition_player.update(active_size)
             if surface is not None:
                 if surface.get_size() != active_size:
-                    surface = pygame.transform.smoothscale(surface, active_size)
+                    surface = self._scaled_sprite(f"outgoing_{id(surface)}", surface, active_size)
                 self.screen.blit(surface, active_dest)
             elif fallback is not None:
                 self.screen.blit(self._scaled_sprite(str(id(fallback)), fallback, active_size), active_dest)
@@ -912,45 +1004,45 @@ class PortraitRenderer:
         self.screen.set_clip(previous_clip)
 
         # 4. Status Plate & Dialogue Subtitles at Bottom
-        plate_w = max(80, min(w - 64, 860))
-        plate_h = 42
-        plate_x = center_x - plate_w // 2
-        plate_y = h - frame_margin_y - 65
+        if self.show_status_plate:
+            plate_w = self._plate_w
+            plate_h = self._plate_h
+            plate_x = self._plate_x
+            plate_y = self._plate_y
+            plate_rect = self._plate_rect
 
-        plate_rect = pygame.Rect(plate_x, plate_y, plate_w, plate_h)
-        pygame.draw.rect(self.screen, (15, 14, 12), plate_rect, border_radius=8)
-        pygame.draw.rect(self.screen, (180, 140, 45), plate_rect, width=2, border_radius=8)
+            pygame.draw.rect(self.screen, (15, 14, 12), plate_rect, border_radius=8)
+            pygame.draw.rect(self.screen, (180, 140, 45), plate_rect, width=2, border_radius=8)
 
-        # State Badge Styling
-        state_colors = {
-            PortraitState.IDLE: ((160, 160, 160), "Approach the portrait"),
-            PortraitState.WAKE_PENDING: ((234, 179, 8), "A visitor approaches..."),
-            PortraitState.GREETING: ((250, 204, 21), "Welcome, traveller"),
-            PortraitState.LISTENING: ((56, 189, 248), "Listening - speak freely"),
-            PortraitState.THINKING: ((192, 132, 252), "Considering your words..."),
-            PortraitState.SPEAKING: ((251, 146, 60), "Wilhelm speaks"),
-            PortraitState.COOLDOWN: ((148, 163, 184), "Until we meet again"),
-        }
-        badge_color, state_label = state_colors.get(self.current_state, ((200, 200, 200), self.current_state.value))
+            # State Badge Styling
+            state_colors = {
+                PortraitState.IDLE: ((160, 160, 160), "Approach the portrait"),
+                PortraitState.WAKE_PENDING: ((234, 179, 8), "A visitor approaches..."),
+                PortraitState.GREETING: ((250, 204, 21), "Welcome, traveller"),
+                PortraitState.LISTENING: ((56, 189, 248), "Listening - speak freely"),
+                PortraitState.THINKING: ((192, 132, 252), "Considering your words..."),
+                PortraitState.SPEAKING: ((251, 146, 60), "Wilhelm speaks"),
+                PortraitState.COOLDOWN: ((148, 163, 184), "Until we meet again"),
+            }
+            badge_color, state_label = state_colors.get(self.current_state, ((200, 200, 200), self.current_state.value))
 
-        state_badge_surf = self._text(self.badge_font, state_label, badge_color)
-        pygame.draw.circle(self.screen, badge_color, (plate_x + 19, plate_y + plate_h // 2), 4)
-        self.screen.blit(state_badge_surf, (plate_x + 32, plate_y + (plate_h - state_badge_surf.get_height()) // 2))
+            state_badge_surf = self._text(self.badge_font, state_label, badge_color)
+            pygame.draw.circle(self.screen, badge_color, (plate_x + 19, plate_y + plate_h // 2), 4)
+            self.screen.blit(state_badge_surf, (plate_x + 32, plate_y + (plate_h - state_badge_surf.get_height()) // 2))
 
-        # Audio VU / Amplitude Bar on plate when speaking/listening
-        if plate_w > 420 and self.current_state in (PortraitState.SPEAKING, PortraitState.LISTENING):
-            vu_x = plate_x + plate_w - 160
-            vu_y = plate_y + 14
-            pygame.draw.rect(self.screen, (40, 40, 40), (vu_x, vu_y, 140, 14), border_radius=4)
-            fill_w = int(min(1.0, max(0.0, self.audio_amplitude * 2.2)) * 136)
-            if fill_w > 0:
-                pygame.draw.rect(self.screen, (251, 146, 60) if self.current_state == PortraitState.SPEAKING else (56, 189, 248), (vu_x + 2, vu_y + 2, fill_w, 10), border_radius=3)
+            # Audio VU / Amplitude Bar on plate when speaking/listening
+            if plate_w > 420 and self.current_state in (PortraitState.SPEAKING, PortraitState.LISTENING):
+                pygame.draw.rect(self.screen, (40, 40, 40), self._plate_vu_rect, border_radius=4)
+                fill_w = int(min(1.0, max(0.0, self.audio_amplitude * 2.2)) * 136)
+                if fill_w > 0:
+                    vu_color = (251, 146, 60) if self.current_state == PortraitState.SPEAKING else (56, 189, 248)
+                    pygame.draw.rect(self.screen, vu_color, (self._plate_vu_rect.x + 2, self._plate_vu_rect.y + 2, fill_w, 10), border_radius=3)
 
         # Spoken Dialogue Subtitle Banner
         if self.subtitle_text:
             sub_surf = self._get_subtitle_surface(max(40, canvas_rect.width - 32), max(50, h // 3))
-            sub_rect = sub_surf.get_rect(midbottom=(center_x, plate_y - 12))
-            self.screen.blit(sub_surf, sub_rect)
+            sub_y = (self._plate_y - 12 - sub_surf.get_height()) if self.show_status_plate else (h - 24 - sub_surf.get_height())
+            self.screen.blit(sub_surf, (center_x - sub_surf.get_width() // 2, sub_y))
 
         # 5. Corner Camera Picture-in-Picture (PiP) Feed
         if self.show_camera_pip and self.camera_feed_surface is not None:

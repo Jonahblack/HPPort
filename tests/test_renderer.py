@@ -210,13 +210,26 @@ class TestPortraitRenderer(unittest.TestCase):
         self.renderer.anim_time = 12.34
 
         self.renderer.render()
-        canvas_rect = pygame.Rect(int(640*0.04), int(480*0.04), 640 - 2*int(640*0.04), 480 - 2*int(480*0.04)).inflate(-36, -36)
+        canvas_rect = self.renderer._canvas_rect
         bw, bh = base_surf.get_size()
         scale = max(canvas_rect.width / bw, canvas_rect.height / bh)
         target_size = (int(bw * scale), int(bh * scale))
         expected_x = canvas_rect.centerx - target_size[0] // 2
         expected_y = canvas_rect.centery - target_size[1] // 2
         self.assertEqual(self.renderer._last_frame_dest, (expected_x, expected_y))
+
+    def test_show_frame_disabled_by_default_uses_full_viewport(self):
+        self.assertFalse(self.renderer.show_frame)
+        self.renderer.render()
+        self.assertEqual(self.renderer._canvas_rect, pygame.Rect(0, 0, 640, 480))
+        self.assertIsNone(self.renderer._frame_surface)
+
+    def test_show_frame_enabled_uses_inset_canvas(self):
+        self.renderer.show_frame = True
+        self.renderer._update_geometry(640, 480)
+        self.assertIsNotNone(self.renderer._frame_surface)
+        expected_canvas = pygame.Rect(int(640*0.04), int(480*0.04), 640 - 2*int(640*0.04), 480 - 2*int(480*0.04)).inflate(-36, -36)
+        self.assertEqual(self.renderer._canvas_rect, expected_canvas)
 
     def test_scene_director_dynamic_face_articulation_holding_visitor_facing(self):
         endpoint = pygame.Surface((1280, 720))

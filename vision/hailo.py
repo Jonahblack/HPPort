@@ -12,6 +12,8 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 
 from vision.base import BaseVisionDetector
+from vision.person_detector import SmartPersonDetector
+from vision.wake_word import TwoTierWakeController, WakeTriggerResult
 
 
 class HailoVision(BaseVisionDetector):
@@ -61,6 +63,13 @@ class HailoVision(BaseVisionDetector):
         self._preview_surface = None
         self._standby_frame = None
         self._opencv_configured = False
+
+        self.two_tier_controller = TwoTierWakeController(config)
+        self.smart_detector = SmartPersonDetector(config)
+        self._dwell_start_time: Optional[float] = None
+        self._latest_dwell_seconds = 0.0
+        self._latest_engaged = False
+        self._latest_wake_trigger = WakeTriggerResult()
 
     def start(self) -> None:
         """Initialize Hailo runtime diagnostics and camera capture thread."""
@@ -132,6 +141,23 @@ class HailoVision(BaseVisionDetector):
                 else:
                     target_x, target_y, target_dist = 0.0, 0.0, 1.0
 
+                now = time.monotonic()
+                is_facing = abs(target_x) <= self.two_tier_controller.facing_tolerance
+                is_in_zone = target_dist <= self.two_tier_controller.max_distance
+                if detected and is_in_zone and is_facing:
+                    if self._dwell_start_time is None:
+                        self._dwell_start_time = now
+                    dwell_seconds = now - self._dwell_start_time
+                else:
+                    self._dwell_start_time = None
+                    dwell_seconds = 0.0
+
+                wake_res = self.two_tier_controller.evaluate_wake_intent(
+                    person_detected=detected,
+                    dwell_seconds=dwell_seconds,
+                    gaze=(target_x, target_y, target_dist),
+                )
+
                 with self._frame_lock:
                     # Published frames are immutable snapshots. The display can
                     # retain a reference without copying camera-sized buffers.
@@ -139,6 +165,9 @@ class HailoVision(BaseVisionDetector):
                     self._latest_detected = detected
                     self._latest_confidence = confidence
                     self._bounding_box = bbox
+                    self._latest_dwell_seconds = dwell_seconds
+                    self._latest_engaged = (dwell_seconds >= 0.2 and is_in_zone)
+                    self._latest_wake_trigger = wake_res
                     alpha = 0.18
                     self._smoothed_gaze_x += alpha * (target_x - self._smoothed_gaze_x)
                     self._smoothed_gaze_y += alpha * (target_y - self._smoothed_gaze_y)
@@ -455,7 +484,7 @@ class HailoVision(BaseVisionDetector):
     def get_status_info(self) -> Dict[str, Any]:
         manual_override = time.monotonic() < self._manual_detect_until
         with self._frame_lock:
-            return {
+            info = {
                 "driver": self._camera_driver,
                 "hailo_initialized": self._hailo_initialized,
                 "detector": "motion",
@@ -467,6 +496,79 @@ class HailoVision(BaseVisionDetector):
                 "camera_error": self._camera_error,
                 "model_path": self.model_path,
                 "camera_backend": self.camera_backend,
+                "two_tier_enabled": self.two_tier_controller.enabled,
+                "dwell_seconds": round(float(self._latest_dwell_seconds), 2),
+                "engaged": self._latest_engaged or manual_override,
+                "wake_triggered": self._latest_wake_trigger.triggered or manual_override,
+                "wake_source": "manual" if manual_override else self._latest_wake_trigger.source,
+            }
+            return info
+
+    def is_person_present(self) -> bool:
+        """Tier 1: Whether person presence is identified."""
+        return self.is_person_detected()
+
+    def is_visitor_engaged(self) -> bool:
+        """Tier 1: Whether visitor is in close interaction zone and facing portrait."""
+        if not self._running:
+            return False
+        if time.monotonic() < self._manual_detect_until:
+            return True
+        with self._frame_lock:
+            return self._latest_engaged
+
+    def get_visitor_proximity(self) -> float:
+        """Estimated normalized distance to primary visitor."""
+        with self._frame_lock:
+            return round(float(self._smoothed_distance), 3)
+
+    def get_dwell_seconds(self) -> float:
+        """Continuous dwell duration in conversational zone."""
+        with self._frame_lock:
+            return round(float(self._latest_dwell_seconds), 2)
+
+    def evaluate_wake_intent(
+        self,
+        audio_chunk: Optional[bytes] = None,
+        transcript_text: Optional[str] = None,
+    ) -> WakeTriggerResult:
+        """Tier 2: Evaluate whether conversational intent conditions are met."""
+        with self._frame_lock:
+            detected = self._latest_detected or (time.monotonic() < self._manual_detect_until)
+            dwell = self._latest_dwell_seconds
+            gaze = (self._smoothed_gaze_x, self._smoothed_gaze_y, self._smoothed_distance)
+        return self.two_tier_controller.evaluate_wake_intent(
+            person_detected=detected,
+            dwell_seconds=dwell,
+            gaze=gaze,
+            audio_chunk=audio_chunk,
+            transcript_text=transcript_text,
+        )
+
+    def is_wake_triggered(self) -> bool:
+        """Convenience query for Tier 2 wake trigger flag."""
+        if time.monotonic() < self._manual_detect_until:
+            return True
+        with self._frame_lock:
+            return self._latest_wake_trigger.triggered
+
+    def get_presence_metrics(self) -> Dict[str, Any]:
+        """Aggregate telemetry dictionary for state machine and debug display."""
+        manual_override = time.monotonic() < self._manual_detect_until
+        with self._frame_lock:
+            return {
+                "present": self._latest_detected or manual_override,
+                "engaged": self._latest_engaged or manual_override,
+                "confidence": round(max(self._latest_confidence, 0.94 if manual_override else 0.0), 2),
+                "proximity": round(float(self._smoothed_distance), 2),
+                "dwell_seconds": round(float(self._latest_dwell_seconds), 2),
+                "gaze": (
+                    round(float(self._smoothed_gaze_x), 3),
+                    round(float(self._smoothed_gaze_y), 3),
+                    round(float(self._smoothed_distance), 3),
+                ),
+                "wake_triggered": self._latest_wake_trigger.triggered or manual_override,
+                "wake_source": "manual" if manual_override else self._latest_wake_trigger.source,
             }
 
     def get_visitor_gaze(self) -> Tuple[float, float, float]:

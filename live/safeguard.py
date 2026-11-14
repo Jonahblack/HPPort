@@ -30,7 +30,7 @@ class TokenSafeguard:
         self.session_limit = int(live_cfg.get("max_session_tokens", self.DEFAULT_SESSION_LIMIT))
         self.fallback_speech = live_cfg.get(
             "quota_fallback_text",
-            "My celestial communications are depleted for today! I shall converse with thee through local enchantments instead.",
+            "My long-distance astral relays need winding for the evening. We shall converse through local clockwork instead!",
         )
 
         # Storage directory

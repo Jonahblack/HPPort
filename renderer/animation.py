@@ -50,14 +50,14 @@ class SaccadeController:
         self.saccade_end_time = 0.0
 
     def update(self) -> Tuple[float, float]:
-        """Update and return (jitter_x, jitter_y) in pixels."""
+        """Update and return (jitter_x, jitter_y) in pixels (strictly 1-2px bounded)."""
         now = time.monotonic()
         delta = min(0.1, max(0.0, now - self._last_update))
         self._last_update = now
 
         if now >= self.next_saccade_time:
             angle = random.uniform(0.0, math.tau)
-            dist = random.uniform(0.5, self.max_jitter_px)
+            dist = random.uniform(0.8, self.max_jitter_px)
             self.target_offset_x = math.cos(angle) * dist
             self.target_offset_y = math.sin(angle) * dist * 0.6
             self.saccade_end_time = now + random.uniform(0.08, 0.18)
@@ -79,13 +79,13 @@ class BlinkController:
 
     def __init__(
         self,
-        min_interval_sec: float = 2.2,
+        min_interval_sec: float = 2.5,
         max_interval_sec: float = 5.5,
         blink_duration_ms: int = 180,
     ):
         self.min_interval = min_interval_sec
         self.max_interval = max_interval_sec
-        self.blink_duration_sec = max(0.12, blink_duration_ms / 1000.0)
+        self.blink_duration_sec = max(0.10, blink_duration_ms / 1000.0)
 
         self.next_blink_time = time.monotonic() + random.uniform(self.min_interval, self.max_interval)
         self.is_blinking = False
@@ -117,13 +117,14 @@ class BlinkController:
                     self.next_blink_time = now + random.uniform(self.min_interval, self.max_interval)
             else:
                 norm = elapsed / total
+                # Asymmetric biological easing: rapid ease-in closing (35%), brief hold (15%), gentle ease-out opening (50%)
                 if norm < 0.35:
                     t = norm / 0.35
                     self.closure_progress = t * t
-                elif norm < 0.55:
+                elif norm < 0.50:
                     self.closure_progress = 1.0
                 else:
-                    t = (norm - 0.55) / 0.45
+                    t = (norm - 0.50) / 0.50
                     self.closure_progress = 1.0 - math.sin(t * (math.pi / 2))
 
                 if self.closure_progress < 0.20:
@@ -144,6 +145,33 @@ class BlinkController:
         return self.closure_progress
 
 
+class BreathingController:
+    """Simulates physiological chest breathing drift with sinusoidal vertical oscillation (2-3px).
+
+    Follows the Living Portrait principle from AGENTS.md:
+    Wilhelm's chest breathes with a natural sinusoidal vertical drift of 2-3 pixels.
+    """
+
+    def __init__(
+        self,
+        amplitude_px: float = 2.5,
+        period_sec: float = 4.19,  # ~1.5 rad/s: math.tau / 1.5 ≈ 4.1888s (~14.3 breaths/min)
+    ):
+        self.amplitude_px = max(1.0, min(5.0, float(amplitude_px)))
+        self.period_sec = max(1.0, float(period_sec))
+        self._start_time = time.monotonic()
+
+    def update(self, current_time: Optional[float] = None) -> float:
+        """Return the current vertical pixel offset in range [-amplitude_px, +amplitude_px]."""
+        now = time.monotonic() if current_time is None else current_time
+        elapsed = now - self._start_time
+        return math.sin(elapsed * (math.tau / self.period_sec)) * self.amplitude_px
+
+    def get_offset(self, anim_time: float) -> float:
+        """Calculate breathing vertical offset directly from elapsed animation time."""
+        return math.sin(anim_time * 1.5) * self.amplitude_px
+
+
 class LipSyncEngine:
     """Computes phonetic Preston-Blair visemes and RMS amplitudes for realistic speech animation."""
 
@@ -160,12 +188,15 @@ class LipSyncEngine:
         self.current_viseme = "X"
         self.previous_viseme = "X"
         self.viseme_change_time = time.monotonic()
+        self.current_amplitude = 0.0
+        self.target_amplitude = 0.0
 
     def analyze_wav(self, wav_path: str, fps: int = 60) -> List[Dict[str, Any]]:
         """Convert a WAV file into a list of frame animation dicts containing:
-        - 'amplitude': normalized RMS (0.0 to 1.0)
+        - 'amplitude': smoothed normalized RMS (0.0 to 1.0)
         - 'viseme': Preston-Blair viseme ('A' through 'H', 'X')
         - 'mouth_index': legacy 1, 2, 3 shape index
+        - 'openness': continuous mouth aperture metric (0.0 to 1.0)
         """
         rhubarb_json_path = os.path.splitext(wav_path)[0] + ".json"
         rhubarb_cues = self._load_rhubarb_json(rhubarb_json_path)
@@ -228,23 +259,52 @@ class LipSyncEngine:
                     rms_list.append(0.0)
                     zcr_list.append(0.0)
 
+            # Temporal envelope smoothing: fast attack (~20ms) and smooth decay (~60ms)
+            attack = 0.70
+            decay = 0.30
+            smoothed_rms = []
+            env = 0.0
+            for r in rms_list:
+                if r > env:
+                    env += attack * (r - env)
+                else:
+                    env += decay * (r - env)
+                smoothed_rms.append(env)
+
+            # Estimate visemes per frame
+            raw_visemes = []
+            norm_rms_list = []
             for i in range(num_frames):
-                raw_rms = rms_list[i]
-                zcr = zcr_list[i]
-                norm_rms = min(1.0, raw_rms / (max_rms * 0.82)) if max_rms > 0 else 0.0
+                norm_rms = min(1.0, smoothed_rms[i] / (max_rms * 0.82)) if max_rms > 0 else 0.0
+                norm_rms_list.append(norm_rms)
                 frame_time_sec = i / float(fps)
 
                 if rhubarb_cues:
-                    viseme = self._get_viseme_from_cues(rhubarb_cues, frame_time_sec)
+                    v = self._get_viseme_from_cues(rhubarb_cues, frame_time_sec)
                 else:
-                    viseme = self._estimate_viseme(norm_rms, zcr)
+                    v = self._estimate_viseme(norm_rms, zcr_list[i])
+                raw_visemes.append(v)
 
+            # Coarticulation filter: smooth out isolated single-frame oscillations (flutters)
+            coarticulated_visemes = list(raw_visemes)
+            for i in range(1, num_frames - 1):
+                prev_v = coarticulated_visemes[i - 1]
+                next_v = raw_visemes[i + 1]
+                cur_v = coarticulated_visemes[i]
+                if prev_v == next_v and cur_v != prev_v and cur_v not in ("X", "A"):
+                    coarticulated_visemes[i] = prev_v
+
+            for i in range(num_frames):
+                norm_rms = norm_rms_list[i]
+                viseme = coarticulated_visemes[i]
                 mouth_index = self.viseme_to_legacy_index(viseme)
+                openness = self.viseme_to_openness(viseme, norm_rms)
 
                 frames_data.append({
                     "amplitude": round(norm_rms, 3),
                     "viseme": viseme,
                     "mouth_index": mouth_index,
+                    "openness": round(openness, 3),
                 })
 
             return frames_data
@@ -256,9 +316,26 @@ class LipSyncEngine:
                     "amplitude": round(0.3 * (1 + math.sin(i * 0.4)), 3),
                     "viseme": ("B" if (i // 4) % 2 == 0 else "C"),
                     "mouth_index": (2 if (i // 4) % 2 == 0 else 3),
+                    "openness": round(0.4 * (1 + math.sin(i * 0.4)), 3),
                 }
                 for i in range(fps * 3)
             ]
+
+    def viseme_to_openness(self, viseme: str, amplitude: float = 0.0) -> float:
+        """Calculate continuous openness metric (0.0 to 1.0) combining viseme shape and acoustic amplitude."""
+        base_openness = {
+            "X": 0.0,
+            "A": 0.05,
+            "B": 0.25,
+            "F": 0.35,
+            "G": 0.35,
+            "E": 0.50,
+            "H": 0.55,
+            "C": 0.70,
+            "D": 0.95,
+        }.get(viseme.upper(), 0.1)
+        amp = max(0.0, min(1.0, float(amplitude)))
+        return min(1.0, max(0.0, base_openness * (0.7 + 0.4 * amp)))
 
     def _estimate_viseme(self, norm_rms: float, zcr: float) -> str:
         """Classify audio slice into Preston-Blair viseme using energy and spectral cues."""
@@ -301,13 +378,15 @@ class LipSyncEngine:
             return 2
         return 1
 
-    def set_active_viseme(self, viseme: str) -> None:
+    def set_active_viseme(self, viseme: str, amplitude: Optional[float] = None) -> None:
         """Update active viseme and track transition time for smooth alpha cross-fading."""
         viseme = viseme.upper()
         if viseme != self.current_viseme:
             self.previous_viseme = self.current_viseme
             self.current_viseme = viseme
             self.viseme_change_time = time.monotonic()
+        if amplitude is not None:
+            self.target_amplitude = max(0.0, min(1.0, float(amplitude)))
 
     def get_crossfade_alpha(self) -> float:
         """Returns 0.0 to 1.0 progress of the transition between previous and current viseme."""
@@ -649,6 +728,40 @@ class DeskFaceRig:
         self.face_rel_y = float(face_rel_y)
         self.reference_canvas_size = reference_canvas_size
 
+        # Continuous mouth interpolation and amplitude state across frames
+        self._mouth_initialized = False
+        self._last_mouth_time = time.monotonic()
+        self.cur_w = 30.0
+        self.cur_h = 3.5
+        self.cur_offset_y = 0.0
+        self.cur_teeth_w = 0.0
+        self.cur_teeth_h = 0.0
+        self.cur_teeth_y = 0.0
+        self.cur_tongue_w = 0.0
+        self.cur_tongue_h = 0.0
+        self.cur_tongue_y = 0.0
+        self.cur_cav_r = 90.0
+        self.cur_cav_g = 35.0
+        self.cur_cav_b = 30.0
+        self.cur_amplitude = 0.0
+
+    def _reset_mouth_state(self) -> None:
+        """Reset mouth interpolation back to resting shape."""
+        self._mouth_initialized = False
+        self.cur_w = 30.0
+        self.cur_h = 3.5
+        self.cur_offset_y = 0.0
+        self.cur_teeth_w = 0.0
+        self.cur_teeth_h = 0.0
+        self.cur_teeth_y = 0.0
+        self.cur_tongue_w = 0.0
+        self.cur_tongue_h = 0.0
+        self.cur_tongue_y = 0.0
+        self.cur_cav_r = 90.0
+        self.cur_cav_g = 35.0
+        self.cur_cav_b = 30.0
+        self.cur_amplitude = 0.0
+
     def get_face_geometry(
         self,
         target_size: Tuple[int, int],
@@ -722,7 +835,10 @@ class DeskFaceRig:
 
         for eye_cx, eye_cy in (geometry["left_eye"], geometry["right_eye"]):
             if blink_stage == "closed":
-                # Eased fully closed eyelid
+                # Eased fully closed eyelid skin fill
+                lid_rect = pygame.Rect(eye_cx - eye_w // 2, eye_cy - eye_h // 2, eye_w, eye_h)
+                pygame.draw.ellipse(surface, (215, 175, 145), lid_rect)
+                # Crease and closed lash line
                 arc_rect = pygame.Rect(eye_cx - eye_w // 2, eye_cy - eye_h // 4, eye_w, max(2, eye_h // 2 + 2))
                 pygame.draw.arc(surface, (55, 38, 25), arc_rect, 3.14, 6.28, max(1, int(2 * face_scale)))
             else:
@@ -757,8 +873,10 @@ class DeskFaceRig:
         is_speaking: bool = True,
         crossfade_alpha: float = 1.0,
         sprites: Optional[Dict[str, Any]] = None,
+        amplitude: Optional[float] = None,
+        **kwargs,
     ) -> None:
-        """Render Preston-Blair viseme lip-sync or legacy shapes during speech."""
+        """Render Preston-Blair viseme lip-sync with smooth continuous interpolation and amplitude modulation."""
         import pygame
 
         v = str(viseme).strip().upper()
@@ -766,6 +884,7 @@ class DeskFaceRig:
             v = "X"
 
         if not is_speaking and v in ("X", "A"):
+            self._reset_mouth_state()
             return  # Retain natural resting mouth of the held video frame
 
         mouth_cx, mouth_cy = geometry["mouth_center"]
@@ -785,50 +904,118 @@ class DeskFaceRig:
                     surface.blit(scaled_sprite, (mouth_cx - scaled_w // 2, mouth_cy - scaled_h // 2))
                     return
 
-        # Preston-Blair Viseme Mouth Rendering (matching oil-painting style)
-        if v in ("A", "X"):
-            # Closed mouth / rest
-            pygame.draw.ellipse(surface, (90, 35, 30), (mouth_cx - int(15 * scale_x), mouth_cy, max(4, int(30 * scale_x)), max(2, int(4 * scale_y))))
-        elif v == "B":
-            # Slightly parted consonants (K, S, T, D, N, Z)
-            pygame.draw.ellipse(surface, (65, 18, 18), (mouth_cx - int(14 * scale_x), mouth_cy - int(2 * scale_y), max(4, int(28 * scale_x)), max(3, int(8 * scale_y))))
-            pygame.draw.rect(surface, (240, 240, 240), (mouth_cx - int(9 * scale_x), mouth_cy - int(2 * scale_y), max(2, int(18 * scale_x)), max(1, int(3 * scale_y))))
-        elif v == "C":
-            # Open vowels (EH, AE)
-            pygame.draw.ellipse(surface, (60, 15, 15), (mouth_cx - int(17 * scale_x), mouth_cy - int(4 * scale_y), max(4, int(34 * scale_x)), max(4, int(13 * scale_y))))
-            pygame.draw.rect(surface, (245, 245, 245), (mouth_cx - int(10 * scale_x), mouth_cy - int(4 * scale_y), max(2, int(20 * scale_x)), max(1, int(4 * scale_y))))
-            pygame.draw.ellipse(surface, (175, 55, 65), (mouth_cx - int(7 * scale_x), mouth_cy + int(3 * scale_y), max(2, int(14 * scale_x)), max(1, int(6 * scale_y))))
-        elif v == "D":
-            # Wide open vowels (AA, AO)
-            pygame.draw.ellipse(surface, (45, 10, 10), (mouth_cx - int(19 * scale_x), mouth_cy - int(6 * scale_y), max(4, int(38 * scale_x)), max(5, int(18 * scale_y))))
-            pygame.draw.rect(surface, (250, 250, 250), (mouth_cx - int(12 * scale_x), mouth_cy - int(6 * scale_y), max(2, int(24 * scale_x)), max(1, int(5 * scale_y))))
-            pygame.draw.ellipse(surface, (185, 65, 75), (mouth_cx - int(9 * scale_x), mouth_cy + int(4 * scale_y), max(2, int(18 * scale_x)), max(2, int(7 * scale_y))))
-        elif v == "E":
-            # Rounded vowels (O, OW, ER)
-            pygame.draw.ellipse(surface, (50, 12, 12), (mouth_cx - int(11 * scale_x), mouth_cy - int(5 * scale_y), max(4, int(22 * scale_x)), max(3, int(13 * scale_y))))
-            pygame.draw.rect(surface, (240, 240, 240), (mouth_cx - int(6 * scale_x), mouth_cy - int(5 * scale_y), max(2, int(12 * scale_x)), max(1, int(3 * scale_y))))
-        elif v == "F":
-            # Puckered lips (UW, W, OO)
-            pygame.draw.circle(surface, (55, 14, 14), (mouth_cx, mouth_cy + int(2 * scale_y)), max(2, int(7 * face_scale)))
-            pygame.draw.circle(surface, (230, 230, 230), (mouth_cx, mouth_cy + int(1 * scale_y)), max(1, int(3 * face_scale)))
-        elif v == "G":
-            # Labiodental (upper teeth on lower lip: F, V)
-            pygame.draw.ellipse(surface, (70, 20, 20), (mouth_cx - int(13 * scale_x), mouth_cy - int(2 * scale_y), max(4, int(26 * scale_x)), max(2, int(8 * scale_y))))
-            pygame.draw.rect(surface, (248, 248, 248), (mouth_cx - int(9 * scale_x), mouth_cy - int(2 * scale_y), max(2, int(18 * scale_x)), max(1, int(4 * scale_y))))
-        elif v == "H":
-            # Tongue against teeth (L, TH)
-            pygame.draw.ellipse(surface, (55, 15, 15), (mouth_cx - int(15 * scale_x), mouth_cy - int(4 * scale_y), max(4, int(30 * scale_x)), max(3, int(13 * scale_y))))
-            pygame.draw.rect(surface, (240, 240, 240), (mouth_cx - int(9 * scale_x), mouth_cy - int(4 * scale_y), max(2, int(18 * scale_x)), max(1, int(3 * scale_y))))
-            pygame.draw.ellipse(surface, (190, 70, 80), (mouth_cx - int(6 * scale_x), mouth_cy - int(1 * scale_y), max(2, int(12 * scale_x)), max(2, int(6 * scale_y))))
+        # Target mouth parameters for Preston-Blair visemes:
+        # (width, height, offset_y, teeth_w, teeth_h, teeth_y, tongue_w, tongue_h, tongue_y, cavity_rgb)
+        specs: Dict[str, Tuple[float, float, float, float, float, float, float, float, float, Tuple[int, int, int]]] = {
+            "A": (30.0, 3.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, (90, 35, 30)),
+            "X": (30.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, (90, 35, 30)),
+            "B": (28.0, 8.0, -2.0, 18.0, 3.0, -2.0, 0.0, 0.0, 0.0, (65, 18, 18)),
+            "C": (34.0, 13.0, -4.0, 20.0, 4.0, -4.0, 14.0, 6.0, 3.0, (60, 15, 15)),
+            "D": (38.0, 18.0, -6.0, 24.0, 5.0, -6.0, 18.0, 7.0, 4.0, (45, 10, 10)),
+            "E": (22.0, 13.0, -5.0, 12.0, 3.0, -5.0, 0.0, 0.0, 0.0, (50, 12, 12)),
+            "F": (14.0, 14.0, 2.0, 6.0, 6.0, 1.0, 0.0, 0.0, 0.0, (55, 14, 14)),
+            "G": (26.0, 8.0, -2.0, 18.0, 4.0, -2.0, 0.0, 0.0, 0.0, (70, 20, 20)),
+            "H": (30.0, 13.0, -4.0, 18.0, 3.0, -4.0, 12.0, 6.0, -1.0, (55, 15, 15)),
+        }
+
+        spec = specs.get(v, specs["X"])
+        target_w, target_h, target_offset_y, target_teeth_w, target_teeth_h, target_teeth_y, target_tongue_w, target_tongue_h, target_tongue_y, target_cavity = spec
+
+        # Fallback adjustment from legacy mouth_index if viseme was X or A during speech
+        if v in ("X", "A") and mouth_index == 2:
+            spec_b = specs["B"]
+            target_w, target_h, target_offset_y = spec_b[0], spec_b[1], spec_b[2]
+            target_teeth_w, target_teeth_h, target_teeth_y = spec_b[3], spec_b[4], spec_b[5]
+            target_cavity = spec_b[9]
+        elif v in ("X", "A") and mouth_index == 3:
+            spec_d = specs["D"]
+            target_w, target_h, target_offset_y = spec_d[0], spec_d[1], spec_d[2]
+            target_teeth_w, target_teeth_h, target_teeth_y = spec_d[3], spec_d[4], spec_d[5]
+            target_tongue_w, target_tongue_h, target_tongue_y = spec_d[6], spec_d[7], spec_d[8]
+            target_cavity = spec_d[9]
+
+        # Dynamic amplitude modulation: scale mouth opening with acoustic energy
+        if amplitude is not None:
+            eff_amp = max(0.0, min(1.0, float(amplitude)))
         else:
-            # Fallback legacy 1, 2, 3
-            if mouth_index == 2:
-                pygame.draw.ellipse(surface, (65, 18, 18), (mouth_cx - int(15 * scale_x), mouth_cy - int(4 * scale_y), max(4, int(30 * scale_x)), max(3, int(11 * scale_y))))
-                pygame.draw.rect(surface, (245, 245, 245), (mouth_cx - int(9 * scale_x), mouth_cy - int(4 * scale_y), max(2, int(18 * scale_x)), max(1, int(4 * scale_y))))
-            elif mouth_index == 3:
-                pygame.draw.ellipse(surface, (45, 10, 10), (mouth_cx - int(19 * scale_x), mouth_cy - int(6 * scale_y), max(4, int(38 * scale_x)), max(5, int(18 * scale_y))))
-                pygame.draw.rect(surface, (250, 250, 250), (mouth_cx - int(11 * scale_x), mouth_cy - int(6 * scale_y), max(2, int(22 * scale_x)), max(1, int(5 * scale_y))))
-                pygame.draw.ellipse(surface, (185, 65, 75), (mouth_cx - int(9 * scale_x), mouth_cy + int(4 * scale_y), max(2, int(18 * scale_x)), max(2, int(7 * scale_y))))
+            eff_amp = 0.85 if mouth_index == 3 else (0.45 if mouth_index == 2 else 0.15)
+
+        # Subtle expansion on higher acoustic energy (0.75x to 1.25x)
+        amp_scale = 0.75 + 0.50 * eff_amp
+        target_h *= amp_scale
+        target_w *= (0.90 + 0.20 * eff_amp)
+        if target_teeth_w > 0:
+            target_teeth_w *= (0.90 + 0.20 * eff_amp)
+        if target_tongue_w > 0:
+            target_tongue_w *= (0.90 + 0.20 * eff_amp)
+
+        now = time.monotonic()
+        delta = min(0.05, max(0.0, now - self._last_mouth_time))
+        self._last_mouth_time = now
+
+        if not self._mouth_initialized:
+            self._mouth_initialized = True
+            self.cur_w = target_w
+            self.cur_h = target_h
+            self.cur_offset_y = target_offset_y
+            self.cur_teeth_w = target_teeth_w
+            self.cur_teeth_h = target_teeth_h
+            self.cur_teeth_y = target_teeth_y
+            self.cur_tongue_w = target_tongue_w
+            self.cur_tongue_h = target_tongue_h
+            self.cur_tongue_y = target_tongue_y
+            self.cur_cav_r = float(target_cavity[0])
+            self.cur_cav_g = float(target_cavity[1])
+            self.cur_cav_b = float(target_cavity[2])
+        else:
+            # Smooth exponential interpolation between successive frames (~40ms time constant)
+            blend_rate = 24.0
+            lerp = 1.0 - math.exp(-blend_rate * delta) if delta > 0 else 1.0
+            self.cur_w += (target_w - self.cur_w) * lerp
+            self.cur_h += (target_h - self.cur_h) * lerp
+            self.cur_offset_y += (target_offset_y - self.cur_offset_y) * lerp
+            self.cur_teeth_w += (target_teeth_w - self.cur_teeth_w) * lerp
+            self.cur_teeth_h += (target_teeth_h - self.cur_teeth_h) * lerp
+            self.cur_teeth_y += (target_teeth_y - self.cur_teeth_y) * lerp
+            self.cur_tongue_w += (target_tongue_w - self.cur_tongue_w) * lerp
+            self.cur_tongue_h += (target_tongue_h - self.cur_tongue_h) * lerp
+            self.cur_tongue_y += (target_tongue_y - self.cur_tongue_y) * lerp
+            self.cur_cav_r += (float(target_cavity[0]) - self.cur_cav_r) * lerp
+            self.cur_cav_g += (float(target_cavity[1]) - self.cur_cav_g) * lerp
+            self.cur_cav_b += (float(target_cavity[2]) - self.cur_cav_b) * lerp
+
+        mw = max(4, int(self.cur_w * scale_x))
+        mh = max(2, int(self.cur_h * scale_y))
+        my_off = int(self.cur_offset_y * scale_y)
+        cav_color = (
+            max(0, min(255, int(self.cur_cav_r))),
+            max(0, min(255, int(self.cur_cav_g))),
+            max(0, min(255, int(self.cur_cav_b))),
+        )
+
+        if v in ("A", "X") and self.cur_h <= 4.5 and mouth_index == 1:
+            # Closed mouth resting line
+            pygame.draw.ellipse(surface, (90, 35, 30), (mouth_cx - mw // 2, mouth_cy + my_off, mw, mh))
+        else:
+            # Oral cavity
+            cavity_rect = pygame.Rect(mouth_cx - mw // 2, mouth_cy + my_off, mw, mh)
+            pygame.draw.ellipse(surface, cav_color, cavity_rect)
+
+            # Upper teeth
+            if self.cur_teeth_w > 2.0 and self.cur_teeth_h > 1.0:
+                tw = max(2, int(self.cur_teeth_w * scale_x))
+                th = max(1, int(self.cur_teeth_h * scale_y))
+                ty_off = int(self.cur_teeth_y * scale_y)
+                teeth_rect = pygame.Rect(mouth_cx - tw // 2, mouth_cy + ty_off, tw, th)
+                pygame.draw.rect(surface, (245, 245, 245), teeth_rect)
+
+            # Tongue
+            if self.cur_tongue_w > 2.0 and self.cur_tongue_h > 1.0:
+                tgw = max(2, int(self.cur_tongue_w * scale_x))
+                tgh = max(1, int(self.cur_tongue_h * scale_y))
+                tgy_off = int(self.cur_tongue_y * scale_y)
+                tongue_rect = pygame.Rect(mouth_cx - tgw // 2, mouth_cy + tgy_off, tgw, tgh)
+                pygame.draw.ellipse(surface, (180, 60, 70), tongue_rect)
 
     def render(
         self,
@@ -846,6 +1033,8 @@ class DeskFaceRig:
         head_yaw_x: float = 0.0,
         head_pitch_y: float = 0.0,
         sprites: Optional[Dict[str, Any]] = None,
+        amplitude: Optional[float] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Articulate full face: biological blinks, pupil gaze/saccades, and lipsync mouth."""
         geometry = self.get_face_geometry(
@@ -871,5 +1060,7 @@ class DeskFaceRig:
             mouth_index=mouth_index,
             is_speaking=is_speaking,
             sprites=sprites,
+            amplitude=amplitude,
+            **kwargs,
         )
         return geometry

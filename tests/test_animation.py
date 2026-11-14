@@ -1,11 +1,13 @@
 """Unit tests for the upgraded animation engine (Visemes, Blinking, Saccades, Transitions, Idle)."""
 
+import math
 import time
 import unittest
 from unittest.mock import patch
 from renderer.animation import (
     BlinkController,
     SaccadeController,
+    BreathingController,
     LipSyncEngine,
     TransitionSequencePlayer,
     IdleActivityController,
@@ -202,6 +204,129 @@ class TestAnimationEngine(unittest.TestCase):
         # Mouth center should remain untouched (50, 50, 50)
         mx, my = geom["mouth_center"]
         self.assertEqual(surface.get_at((mx, my))[:3], (50, 50, 50))
+
+    def test_breathing_controller_sinusoidal_drift(self):
+        controller = BreathingController(amplitude_px=2.5, period_sec=4.0)
+        # Bounded between -2.5 and +2.5
+        for t in (0.0, 1.0, 2.0, 3.0, 4.0):
+            offset = controller.update(current_time=controller._start_time + t)
+            self.assertGreaterEqual(offset, -2.5)
+            self.assertLessEqual(offset, 2.5)
+
+        # Anim time calculation (Living portrait 2-3px sine drift)
+        self.assertAlmostEqual(controller.get_offset(0.0), 0.0, places=4)
+        peak_offset = controller.get_offset(math.pi / 3.0)  # sin(pi/2) = 1.0
+        self.assertAlmostEqual(peak_offset, 2.5, places=4)
+
+    def test_blink_controller_biological_defaults_and_easing(self):
+        controller = BlinkController()
+        # Defaults: 2.5s - 5.5s interval, 180ms duration
+        self.assertEqual(controller.min_interval, 2.5)
+        self.assertEqual(controller.max_interval, 5.5)
+        self.assertAlmostEqual(controller.blink_duration_sec, 0.18, places=3)
+
+        # Biological easing: closing phase (<35%), closed hold (35%-50%), opening phase (>50%)
+        controller.is_blinking = True
+        t0 = time.monotonic()
+        controller.blink_start_time = t0
+
+        # At 15% into blink -> closing (ease-in, progress > 0)
+        with patch("renderer.animation.time.monotonic", return_value=t0 + 0.18 * 0.15):
+            controller.update()
+            self.assertIn(controller.get_stage(), ("open", "half"))
+            self.assertGreater(controller.get_progress(), 0.0)
+            self.assertLess(controller.get_progress(), 0.5)
+
+        # At 42% into blink -> fully closed hold
+        with patch("renderer.animation.time.monotonic", return_value=t0 + 0.18 * 0.42):
+            controller.update()
+            self.assertEqual(controller.get_stage(), "closed")
+            self.assertEqual(controller.get_progress(), 1.0)
+
+        # At 75% into blink -> opening (ease-out deceleration)
+        with patch("renderer.animation.time.monotonic", return_value=t0 + 0.18 * 0.75):
+            controller.update()
+            self.assertIn(controller.get_stage(), ("half", "open"))
+            self.assertGreater(controller.get_progress(), 0.0)
+            self.assertLess(controller.get_progress(), 1.0)
+
+    def test_lipsync_engine_openness_and_envelope_smoothing(self):
+        engine = LipSyncEngine()
+        # Openness metrics combine viseme shape and acoustic amplitude
+        self.assertEqual(engine.viseme_to_openness("X", 0.0), 0.0)
+        self.assertGreater(engine.viseme_to_openness("B", 0.3), engine.viseme_to_openness("A", 0.3))
+        self.assertGreater(engine.viseme_to_openness("D", 0.8), engine.viseme_to_openness("B", 0.8))
+
+        # Higher amplitude expands openness
+        self.assertGreater(engine.viseme_to_openness("C", 0.9), engine.viseme_to_openness("C", 0.1))
+
+        # Synthetic fallback analysis produces frames with valid openness
+        frames = engine.analyze_wav("nonexistent_test_audio.wav", fps=30)
+        self.assertGreater(len(frames), 0)
+        for frame in frames:
+            self.assertIn("openness", frame)
+            self.assertGreaterEqual(frame["openness"], 0.0)
+            self.assertLessEqual(frame["openness"], 1.0)
+            self.assertIn(frame["viseme"], VISEME_NAMES)
+
+    def test_desk_face_rig_smooth_mouth_interpolation(self):
+        import pygame
+        rig = DeskFaceRig()
+        surface = pygame.Surface((640, 480))
+        geom = rig.get_face_geometry(target_size=(640, 360), dest=(0, 60))
+
+        # Initial frame with viseme B (slightly parted: ~28px wide, 8px high)
+        rig.render_mouth(surface, geom, viseme="B", mouth_index=2, is_speaking=True)
+        w_b = rig.cur_w
+        h_b = rig.cur_h
+
+        # Second frame: switch target to wide open vowel D (~38px wide, 18px high)
+        # Advance clock by a tiny delta (15ms)
+        rig._last_mouth_time -= 0.015
+        rig.render_mouth(surface, geom, viseme="D", mouth_index=3, is_speaking=True)
+
+        # Smooth interpolation: cur_w and cur_h must be between B and D shapes, NOT snapping instantly to D!
+        self.assertGreater(rig.cur_w, w_b)
+        self.assertLess(rig.cur_w, 38.0 * 1.3)
+        self.assertGreater(rig.cur_h, h_b)
+
+    def test_desk_face_rig_amplitude_modulation(self):
+        import pygame
+        rig_quiet = DeskFaceRig()
+        rig_loud = DeskFaceRig()
+        surface = pygame.Surface((640, 480))
+        geom = rig_quiet.get_face_geometry(target_size=(640, 360), dest=(0, 60))
+
+        # Quiet speech (amplitude=0.1) vs Loud speech (amplitude=0.95) for same viseme C
+        rig_quiet.render_mouth(surface, geom, viseme="C", mouth_index=2, is_speaking=True, amplitude=0.1)
+        rig_loud.render_mouth(surface, geom, viseme="C", mouth_index=3, is_speaking=True, amplitude=0.95)
+
+        # Loud mouth opening must be physically wider and deeper than quiet mouth
+        self.assertGreater(rig_loud.cur_h, rig_quiet.cur_h)
+        self.assertGreater(rig_loud.cur_w, rig_quiet.cur_w)
+
+    def test_desk_face_rig_closed_eyelid_skin_fill(self):
+        import pygame
+        rig = DeskFaceRig()
+        surface = pygame.Surface((640, 480))
+        surface.fill((0, 0, 0))
+
+        # Closed eye blink: should fill eyelid skin tone (215, 175, 145) covering eye aperture
+        geom = rig.render(
+            surface=surface,
+            target_size=(640, 360),
+            dest=(0, 60),
+            blink_stage="closed",
+            closure_progress=1.0,
+            viseme="X",
+            mouth_index=1,
+            pupil_x=0.0,
+            pupil_y=0.0,
+            is_speaking=False,
+        )
+        lx, ly = geom["left_eye"]
+        # Eye center should be skin tone (215, 175, 145) and not black (0, 0, 0)
+        self.assertEqual(surface.get_at((lx, ly))[:3], (215, 175, 145))
 
 
 if __name__ == "__main__":

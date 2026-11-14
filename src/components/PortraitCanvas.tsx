@@ -201,37 +201,46 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
       ctx.fillStyle = wallGradient;
       ctx.fillRect(0, 0, width, height);
 
-      // 2. Picture Frame / Outer Canvas Bevel
-      const framePaddingX = width * 0.05;
-      const framePaddingY = height * 0.05;
-      const frameW = width - framePaddingX * 2;
-      const frameH = height - framePaddingY * 2;
-      const frameRadius = 20;
+      const showFrame = config.show_frame ?? false;
+      const showStatusPlate = config.show_status_plate ?? true;
 
-      ctx.beginPath();
-      ctx.roundRect(framePaddingX, framePaddingY, frameW, frameH, frameRadius);
-      ctx.fillStyle = "#26201b";
-      ctx.fill();
+      if (showFrame) {
+        // 2. Picture Frame / Outer Canvas Bevel
+        const framePaddingX = width * 0.05;
+        const framePaddingY = height * 0.05;
+        const frameW = width - framePaddingX * 2;
+        const frameH = height - framePaddingY * 2;
+        const frameRadius = 20;
 
-      // Ornate frame rim
-      ctx.lineWidth = 12;
-      ctx.strokeStyle = `rgb(${config.accent_color.join(",")})`;
-      ctx.stroke();
+        ctx.beginPath();
+        ctx.roundRect(framePaddingX, framePaddingY, frameW, frameH, frameRadius);
+        ctx.fillStyle = "#26201b";
+        ctx.fill();
 
-      // Inner lining
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "rgba(254, 215, 170, 0.35)";
-      ctx.stroke();
+        // Ornate frame rim
+        ctx.lineWidth = 12;
+        ctx.strokeStyle = `rgb(${config.accent_color.join(",")})`;
+        ctx.stroke();
+
+        // Inner lining
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(254, 215, 170, 0.35)";
+        ctx.stroke();
+      }
 
       // Inner Canvas Viewport
-      const innerX = framePaddingX + 14;
-      const innerY = framePaddingY + 14;
-      const innerW = frameW - 28;
-      const innerH = frameH - 28;
+      const innerX = showFrame ? width * 0.05 + 14 : 0;
+      const innerY = showFrame ? height * 0.05 + 14 : 0;
+      const innerW = showFrame ? width - (width * 0.05 + 14) * 2 : width;
+      const innerH = showFrame ? height - (height * 0.05 + 14) * 2 : height;
 
       ctx.save();
       ctx.beginPath();
-      ctx.roundRect(innerX, innerY, innerW, innerH, frameRadius - 4);
+      if (showFrame) {
+        ctx.roundRect(innerX, innerY, innerW, innerH, 16);
+      } else {
+        ctx.rect(0, 0, width, height);
+      }
       ctx.clip();
 
       const centerX = width / 2;
@@ -737,37 +746,39 @@ export const PortraitCanvas: React.FC<PortraitCanvasProps> = ({
       ctx.restore(); // end frame clipping
 
       // 3. Status Plate at bottom
-      const plateW = frameW - 80;
+      const plateW = showFrame ? width * 0.9 - 80 : Math.max(120, Math.min(width - 64, 860));
       const plateH = 34;
-      const plateX = framePaddingX + 40;
-      const plateY = framePaddingY + frameH - plateH - 8;
+      const plateX = (width - plateW) / 2;
+      const plateY = showFrame ? height * 0.95 - plateH - 8 : height - plateH - 12;
 
-      ctx.beginPath();
-      ctx.roundRect(plateX, plateY, plateW, plateH, 6);
-      ctx.fillStyle = "#1e1b18";
-      ctx.fill();
-      ctx.strokeStyle = `rgb(${config.accent_color.join(",")})`;
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      if (showStatusPlate) {
+        ctx.beginPath();
+        ctx.roundRect(plateX, plateY, plateW, plateH, 6);
+        ctx.fillStyle = "#1e1b18";
+        ctx.fill();
+        ctx.strokeStyle = `rgb(${config.accent_color.join(",")})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
 
-      // State label
-      ctx.font = "bold 13px 'Cinzel', serif";
-      ctx.fillStyle =
-        state === PortraitState.SPEAKING
-          ? "#f97316"
-          : state === PortraitState.LISTENING
-          ? "#38bdf8"
-          : state === PortraitState.THINKING
-          ? "#eab308"
-          : "#e2e8f0";
-      ctx.fillText(`STATE: ${state}`, plateX + 16, plateY + 22);
+        // State label
+        ctx.font = "bold 13px 'Cinzel', serif";
+        ctx.fillStyle =
+          state === PortraitState.SPEAKING
+            ? "#f97316"
+            : state === PortraitState.LISTENING
+            ? "#38bdf8"
+            : state === PortraitState.THINKING
+            ? "#eab308"
+            : "#e2e8f0";
+        ctx.fillText(`STATE: ${state}`, plateX + 16, plateY + 22);
 
-      // Camera indicator
-      ctx.font = "11px 'Inter', sans-serif";
-      ctx.fillStyle = cameraAvailable ? "#4ade80" : "#a8a29e";
-      const camText = `Camera: ${cameraAvailable ? cameraMode : "offline"}`;
-      const camWidth = ctx.measureText(camText).width;
-      ctx.fillText(camText, plateX + plateW - camWidth - 16, plateY + 22);
+        // Camera indicator
+        ctx.font = "11px 'Inter', sans-serif";
+        ctx.fillStyle = cameraAvailable ? "#4ade80" : "#a8a29e";
+        const camText = `Camera: ${cameraAvailable ? cameraMode : "offline"}`;
+        const camWidth = ctx.measureText(camText).width;
+        ctx.fillText(camText, plateX + plateW - camWidth - 16, plateY + 22);
+      }
 
       // Subtitle / Spoken speech bubble
       if (statusText) {

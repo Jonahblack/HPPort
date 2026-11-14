@@ -29,7 +29,7 @@ class TestGeminiLiveClient(unittest.TestCase):
     def setUp(self):
         self.config = {
             "gemini_live": {"enabled": True, "api_key_env": "TEST_GEMINI_KEY"},
-            "llm": {"system_prompt": "You are Lord Cadogan.", "history_turn_limit": 1},
+            "llm": {"system_prompt": "You are Wilhelm, the Wandering Artificer.", "history_turn_limit": 1},
         }
         self.safeguard = Mock(spec=TokenSafeguard)
         self.safeguard.can_use_live_api.return_value = (True, "OK")

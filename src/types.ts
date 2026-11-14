@@ -41,6 +41,8 @@ export interface RenderConfig {
   pupil_color: number[];
   mouth_color: number[];
   status_text_color: number[];
+  show_frame?: boolean;
+  show_status_plate?: boolean;
 }
 
 export interface CameraConfig {

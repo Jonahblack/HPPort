@@ -31,7 +31,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_daily_tokens": 250000,
         "max_session_tokens": 40000,
         "storage_file": "token_usage.json",
-        "quota_fallback_text": "My celestial communications are depleted for today! I shall converse with thee through local enchantments instead.",
+        "quota_fallback_text": "My long-distance astral relays need winding for the evening. We shall converse through local clockwork instead!",
     },
     "state_machine": {
         "wake_confirm_frames": 3,
@@ -42,7 +42,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "cooldown_duration_seconds": 8.0,
         "presence_loss_frames": 5,
         "presence_loss_cooldown_seconds": 1.0,
-        "presence_loss_farewell": "Farewell, wanderer...",
+        "presence_loss_farewell": "Farewell for now, friend...",
     },
     "vision": {
         "driver": "hailo",
@@ -54,24 +54,38 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "camera_height": 480,
         "camera_fps": 15,
         "analysis_width": 320,
+        "two_tier": {
+            "enabled": True,
+            "tier1_detector": "auto",
+            "tier2_wake_mode": "hybrid",
+            "wake_words": ["wilhelm", "hey wilhelm", "hello wilhelm"],
+            "gaze_dwell_threshold_seconds": 1.5,
+            "max_interaction_distance": 1.4,
+            "min_person_bbox_height_ratio": 0.22,
+            "facing_angle_tolerance": 0.45,
+        },
     },
     "llm": {
         "driver": "llama_client",
         "endpoint_url": "http://127.0.0.1:8080/v1/chat/completions",
         "model_name": "gemma-4-e2b-instruction",
-        "temperature": 0.35,
+        "temperature": 0.4,
         "max_tokens": 48,
         "timeout_seconds": 90.0,
         "connect_timeout_seconds": 5.0,
         "history_turn_limit": 2,
         "cache_prompt": True,
         "disable_reasoning": True,
-        "empty_response_text": "The castle spirits stole my answer. Ask once more, brave visitor!",
+        "empty_response_text": "A rogue spring slipped my train of thought! Ask once more, my friend—my ears are dialed in.",
         "system_prompt": (
-            "You are Wilhelm, a bold eccentric forest guardian and noble warrior in an enchanted portrait. "
-            "Answer in one lively spoken sentence under 20 words."
+            "You are Wilhelm, the Wandering Artificer—a brilliant, warm, and slightly eccentric "
+            "magical engineer and historian bound to an enchanted oil portrait in your workshop. "
+            "You speak with Renaissance warmth and adventurous wit, utterly confident in your contraptions. "
+            "Minor mishaps or smoke puffs are always 'fascinating data' or 'intentional calibrations.' "
+            "Answer in 1 or 2 concise spoken sentences under 25 words. "
+            "Never use asterisks, emojis, actions, or stage directions."
         ),
-        "greeting_prompt": "Ah, a visitor arrives before my frame! State your business, noble wanderer!",
+        "greeting_prompt": "Ah, welcome! Come in, come in—what brings a curious mind to my workshop today?",
     },
     "stt": {
         "driver": "local_stt",
@@ -129,11 +143,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "assets_dir": "assets",
         "asset_mode": "full_frames",
         "sprite_files": {
-            "base": "forest_warrior_neutral.png",
-            "eyes_closed": "forest_warrior_blink.png",
-            "mouth_1": "forest_warrior_neutral.png",
-            "mouth_2": "forest_warrior_mouth_2.png",
-            "mouth_3": "forest_warrior_mouth_3.png",
+            "base": "wilhelm_reading.png",
+            "speaking_base": "wilhelm_desk_speaking_neutral.png",
+            "wilhelm_reading": "wilhelm_reading.png",
+            "wilhelm_desk_speaking_neutral": "wilhelm_desk_speaking_neutral.png",
+            "wilhelm_tinker": "wilhelm_tinker.jpeg",
+            "wilhelm_engaged_tinker": "wilhelm_engaged_tinker.png",
+            "wilhelm_neutral": "wilhelm_neutral.jpeg",
+            "eyes_closed": "wilhelm_desk_eyes_closed.png",
+            "eyes_half": "wilhelm_desk_eyes_half.png",
+            "mouth_1": "wilhelm_desk_speaking_neutral.png",
+            "mouth_2": "wilhelm_desk_mouth_2.png",
+            "mouth_3": "wilhelm_desk_mouth_3.png",
         },
         "camera_motion": False,
         "ambient_motes": True,
